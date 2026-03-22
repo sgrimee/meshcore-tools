@@ -17,6 +17,7 @@ from textual.worker import get_current_worker
 
 from lma.api import DEFAULT_REGION, fetch_packets
 from lma.db import load_db
+from lma.decoder import decode_packet
 
 MAX_PACKETS = 500
 
@@ -109,49 +110,66 @@ def fmt_ts(iso: str) -> str:
         return iso
 
 
+def _fmt_hash(h: str, db: dict) -> str:
+    """Format a short hash with its resolved name."""
+    name = resolve_name(h, db)
+    return f"[dim]{h}[/dim]  {name}"
+
+
 def _build_detail_text(packet: dict, db: dict) -> str:
     p = packet
+    dec = decode_packet(p.get("raw_data", "") or "")
+
     observer_name = p.get("origin") or resolve_name(p.get("origin_id", ""), db)
+    route = dec.get("route_type") or p.get("route_type", "-")
+    ptype = dec.get("payload_type") or p.get("payload_type", "-")
+    pver = dec.get("payload_version")
+    pver_str = f"  v{pver}" if pver is not None else ""
+
     lines = [
         "[bold]Packet detail[/bold]",
         "",
         f"[dim]Observer:[/dim]   {observer_name}",
         f"[dim]Origin ID:[/dim]  {p.get('origin_id', '-')}",
-        *([ f"[dim]Source:[/dim]    {p['node_name']}" ] if p.get("node_name") else []),
         f"[dim]Heard at:[/dim]   {fmt_ts(p.get('heard_at', ''))}",
-        f"[dim]Type:[/dim]       {p.get('payload_type', '-')}",
-        f"[dim]Route:[/dim]      {p.get('route_type', '-')}",
-        f"[dim]SNR:[/dim]        {p.get('snr', '-')}",
-        f"[dim]RSSI:[/dim]       {p.get('rssi', '-')}",
-        f"[dim]Score:[/dim]      {p.get('score', '-')}",
+        f"[dim]SNR:[/dim]        {p.get('snr', '-')}  "
+        f"[dim]RSSI:[/dim] {p.get('rssi', '-')}  "
+        f"[dim]Score:[/dim] {p.get('score', '-')}",
         "",
+        f"[dim]Route:[/dim]      {route}",
+        f"[dim]Type:[/dim]       {ptype}{pver_str}",
     ]
 
-    full_path = p.get("_path") or []
+    # --- Path decoded from raw ---
+    lines.append("")
+    full_path = dec.get("path") or p.get("_path") or []
+    hop_size = dec.get("path_hop_size", 1)
+    if hop_size > 1:
+        lines.append(f"[dim]Path:[/dim]       ({hop_size}-byte node addresses)")
     if not full_path:
-        lines.append("[dim]Source:[/dim]     (unknown — direct to observer)")
+        lines.append("[dim]Source:[/dim]     unknown (direct)")
         lines.append("[dim]Relays:[/dim]     none")
     else:
         src = full_path[0]
-        lines.append(f"[dim]Source:[/dim]     [dim]{fmt_key_prefix(src)}[/dim]  {resolve_name(src, db)}")
+        lines.append(f"[dim]Source:[/dim]     {_fmt_hash(src, db)}")
         relays = full_path[1:]
         if not relays:
             lines.append("[dim]Relays:[/dim]     none")
         else:
             lines.append("[dim]Relays:[/dim]")
             for hop in relays:
-                name = resolve_name(hop, db)
-                lines.append(f"  [dim]{fmt_key_prefix(hop)}[/dim]  {name}")
+                lines.append(f"  {_fmt_hash(hop, db)}")
 
-    decoded = p.get("decoded_payload")
-    if decoded:
-        lines.append("")
-        lines.append("[dim]Decoded payload:[/dim]")
-        if isinstance(decoded, dict):
-            for k, v in decoded.items():
-                lines.append(f"  {k}: {v}")
-        else:
-            lines.append(f"  {decoded}")
+    # --- Decoded payload ---
+    lines.append("")
+    payload_dec = dec.get("decoded", {})
+    if dec.get("error"):
+        lines.append(f"[dim]Decode error:[/dim] {dec['error']}")
+    elif payload_dec:
+        lines += _fmt_payload(ptype, payload_dec, db)
+    elif dec.get("payload_hex"):
+        lines.append(f"[dim]Payload:[/dim]    {dec['payload_hex'][:64]}"
+                     + ("…" if len(dec.get("payload_hex", "")) > 64 else ""))
 
     regions = p.get("regions") or []
     if regions:
@@ -164,6 +182,52 @@ def _build_detail_text(packet: dict, db: dict) -> str:
         f"[dim]Created:[/dim]    {fmt_ts(p.get('created_at', ''))}",
     ]
     return "\n".join(lines)
+
+
+def _fmt_payload(ptype: str, d: dict, db: dict) -> list[str]:
+    """Format decoded payload fields for the detail view."""
+    lines: list[str] = []
+
+    if ptype == "Advert":
+        if d.get("name"):
+            lines.append(f"[dim]Name:[/dim]       {d['name']}")
+        lines.append(f"[dim]Role:[/dim]       {d.get('role', '-')}")
+        if "lat" in d and "lon" in d:
+            lines.append(f"[dim]Location:[/dim]   {d['lat']}, {d['lon']}")
+        lines.append(f"[dim]Timestamp:[/dim]  {d.get('timestamp', '-')}")
+        lines.append(f"[dim]Public key:[/dim] {d.get('public_key', '-')}")
+        lines.append(f"[dim]Flags:[/dim]      {d.get('flags', '-')}")
+
+    elif ptype in ("Request", "Response", "TextMessage", "AnonRequest"):
+        src = d.get("src_hash", "")
+        dst = d.get("dest_hash", "")
+        lines.append(f"[dim]Src:[/dim]        {_fmt_hash(src, db)}")
+        lines.append(f"[dim]Dst:[/dim]        {_fmt_hash(dst, db)}")
+        lines.append(f"[dim]MAC:[/dim]        {d.get('cipher_mac', '-')}")
+        lines.append(f"[dim]Content:[/dim]    encrypted ({d.get('ciphertext_len', 0)} bytes)")
+
+    elif ptype in ("GroupText", "GroupData"):
+        lines.append(f"[dim]Channel:[/dim]    {d.get('channel_hash', '-')}")
+        lines.append(f"[dim]MAC:[/dim]        {d.get('cipher_mac', '-')}")
+        lines.append(f"[dim]Content:[/dim]    encrypted ({d.get('ciphertext_len', 0)} bytes)")
+
+    elif ptype == "Trace":
+        lines.append(f"[dim]Trace tag:[/dim]  {d.get('trace_tag', '-')}")
+        lines.append(f"[dim]Auth code:[/dim]  {d.get('auth_code', '-')}")
+        snrs = d.get("hop_snrs_db", [])
+        if snrs:
+            lines.append(f"[dim]Hop SNRs:[/dim]   {', '.join(str(s) for s in snrs)} dB")
+
+    elif ptype == "Ack":
+        lines.append(f"[dim]Payload:[/dim]    {d.get('raw', '-')} ({d.get('length', 0)} bytes)")
+
+    elif d.get("error"):
+        lines.append(f"[dim]Error:[/dim]      {d['error']}")
+    else:
+        for k, v in d.items():
+            lines.append(f"  {k}: {v}")
+
+    return lines
 
 
 class FilterScreen(ModalScreen[dict]):
