@@ -76,20 +76,42 @@ def decode_path_from_raw(raw_data: str) -> list[str] | None:
         return None
 
 
-def get_source(path_list: list, db: dict, resolve: bool = True) -> str:
-    """Return the source node (first path element)."""
-    if not path_list:
-        return "?"
-    return resolve_name(path_list[0], db) if resolve else path_list[0]
 
+def format_path(path_list: list, db: dict, resolve: int = 2,
+                src_hash: str = "", route_type: str = "",
+                hop_size: int = 1) -> str:
+    """Format: source → relay1 → relay2 → ...
 
-def format_path(path_list: list, db: dict, resolve: bool = True) -> str:
-    """Format full path: source → relay1 → relay2 → ..."""
-    if not path_list:
-        return "direct"
-    if not resolve:
-        return " → ".join(hop[:8] for hop in path_list)
-    return " → ".join(resolve_name(hop, db) for hop in path_list)
+    resolve: 2 = all names, 1 = source name + relay hex, 0 = all hex.
+    src_hash: authoritative source (from payload or Advert pubkey).
+    route_type: "Direct"/"TransportDirect" means path entries are relays, not source.
+    hop_size: bytes per hop — used to trim src_hash display to match relay display width.
+    """
+    is_direct = route_type in ("Direct", "TransportDirect")
+
+    # Determine source display (trim src_hash to hop_size for visual consistency)
+    if src_hash:
+        if resolve >= 1:
+            src = resolve_name(src_hash, db)
+        else:
+            src = _trim_hash(src_hash, hop_size)
+    elif path_list and not is_direct:
+        src = resolve_name(path_list[0], db) if resolve >= 1 else path_list[0]
+    else:
+        src = "?"
+
+    # Relays: for Direct all path hops are relays; for Flood skip first (= source)
+    relays = path_list if is_direct else path_list[1:]
+
+    if not relays:
+        return src
+
+    if resolve >= 2:
+        relay_parts = [resolve_name(hop, db) for hop in relays]
+    else:
+        relay_parts = relays  # raw hex (already hop_size bytes from path)
+
+    return " → ".join([src] + relay_parts)
 
 
 def format_payload_type(pt: str) -> str:
@@ -110,10 +132,16 @@ def fmt_ts(iso: str) -> str:
         return iso
 
 
-def _fmt_hash(h: str, db: dict) -> str:
-    """Format a short hash with its resolved name."""
+def _trim_hash(h: str, hop_size: int) -> str:
+    """Trim hash to hop_size bytes for display (keeps full value for resolution)."""
+    return h[:hop_size * 2]
+
+
+def _fmt_hash(h: str, db: dict, hop_size: int = 1) -> str:
+    """Format a hash with its resolved name. Display truncated to hop_size bytes."""
+    display = _trim_hash(h, hop_size)
     name = resolve_name(h, db)
-    return f"[dim]{h}[/dim]  {name}"
+    return f"[dim]{display}[/dim]  {name}"
 
 
 def _build_detail_text(packet: dict, db: dict) -> str:
@@ -140,29 +168,45 @@ def _build_detail_text(packet: dict, db: dict) -> str:
         f"[dim]Type:[/dim]       {ptype}{pver_str}",
     ]
 
-    # --- Path decoded from raw ---
+    # --- Source / Relays / Destination ---
     lines.append("")
     full_path = dec.get("path") or p.get("_path") or []
     hop_size = dec.get("path_hop_size", 1)
+    payload_dec = dec.get("decoded") or {}
+
+    is_direct = route in ("Direct", "TransportDirect")
+
+    # Authoritative source: payload src_hash (all encrypted types) or Advert public_key
+    src_hash = payload_dec.get("src_hash", "") or p.get("_src_hash", "")
+    advert_pubkey = payload_dec.get("public_key", "") if ptype == "Advert" else ""
+
+    if advert_pubkey:
+        lines.append(f"[dim]Source:[/dim]     [dim]{_trim_hash(advert_pubkey, hop_size)}[/dim]  "
+                     f"{resolve_name(advert_pubkey, db)}")
+    elif src_hash:
+        lines.append(f"[dim]Source:[/dim]     {_fmt_hash(src_hash, db, hop_size)}")
+    elif full_path and not is_direct:
+        lines.append(f"[dim]Source:[/dim]     {_fmt_hash(full_path[0], db, hop_size)}")
+    else:
+        lines.append("[dim]Source:[/dim]     unknown")
+
+    # Relays: for Direct routing all path hops are relays; for Flood skip path[0] (=source)
+    relays = full_path if is_direct else full_path[1:]
     if hop_size > 1:
         lines.append(f"[dim]Path:[/dim]       ({hop_size}-byte node addresses)")
-    if not full_path:
-        lines.append("[dim]Source:[/dim]     unknown (direct)")
-        lines.append("[dim]Relays:[/dim]     none")
+    if relays:
+        lines.append("[dim]Relays:[/dim]")
+        for hop in relays:
+            lines.append(f"  {_fmt_hash(hop, db, hop_size)}")
     else:
-        src = full_path[0]
-        lines.append(f"[dim]Source:[/dim]     {_fmt_hash(src, db)}")
-        relays = full_path[1:]
-        if not relays:
-            lines.append("[dim]Relays:[/dim]     none")
-        else:
-            lines.append("[dim]Relays:[/dim]")
-            for hop in relays:
-                lines.append(f"  {_fmt_hash(hop, db)}")
+        lines.append("[dim]Relays:[/dim]     none")
+
+    dest_hash = payload_dec.get("dest_hash", "")
+    if dest_hash:
+        lines.append(f"[dim]Dest:[/dim]       {_fmt_hash(dest_hash, db, hop_size)}")
 
     # --- Decoded payload ---
     lines.append("")
-    payload_dec = dec.get("decoded", {})
     if dec.get("error"):
         lines.append(f"[dim]Decode error:[/dim] {dec['error']}")
     elif payload_dec:
@@ -199,10 +243,6 @@ def _fmt_payload(ptype: str, d: dict, db: dict) -> list[str]:
         lines.append(f"[dim]Flags:[/dim]      {d.get('flags', '-')}")
 
     elif ptype in ("Request", "Response", "TextMessage", "AnonRequest"):
-        src = d.get("src_hash", "")
-        dst = d.get("dest_hash", "")
-        lines.append(f"[dim]Src:[/dim]        {_fmt_hash(src, db)}")
-        lines.append(f"[dim]Dst:[/dim]        {_fmt_hash(dst, db)}")
         lines.append(f"[dim]MAC:[/dim]        {d.get('cipher_mac', '-')}")
         lines.append(f"[dim]Content:[/dim]    encrypted ({d.get('ciphertext_len', 0)} bytes)")
 
@@ -387,7 +427,7 @@ class PacketMonitorApp(App):
         self._all_packets: list[dict] = []
         self._packets_by_id: dict[str, dict] = {}
         self._displayed: list[dict] = []
-        self._resolve_path: bool = True
+        self._resolve_path: int = 2  # 2=all names, 1=src name+relay hex, 0=all hex
         self._wrap_path: bool = False
 
     def compose(self) -> ComposeResult:
@@ -433,6 +473,15 @@ class PacketMonitorApp(App):
             self._seen_ids.add(p["id"])
             decoded = decode_path_from_raw(p.get("raw_data", ""))
             p["_path"] = decoded if decoded is not None else (p.get("path") or [])
+            # Extract src_hash from payload prefix for direct packets (empty path)
+            pkt_dec = decode_packet(p.get("raw_data", "") or "")
+            decoded_payload = pkt_dec.get("decoded") or {}
+            p["_src_hash"] = decoded_payload.get("src_hash", "")
+            p["_route_type"] = pkt_dec.get("route_type", "")
+            # For Advert packets, public_key IS the sender; 6 bytes avoids collisions
+            if not p["_src_hash"] and decoded_payload.get("public_key"):
+                p["_src_hash"] = decoded_payload["public_key"][:12]
+            p["_path_hop_size"] = pkt_dec.get("path_hop_size", 1)
             self._packets_by_id[p["id"]] = p
         self._all_packets = (new + self._all_packets)[:MAX_PACKETS]
         visible_ids = {p["id"] for p in self._all_packets}
@@ -483,7 +532,10 @@ class PacketMonitorApp(App):
             snr = f"{p['snr']:.1f}" if p.get("snr") is not None else "-"
             rssi = str(p.get("rssi", "-"))
             raw_path = p.get("_path") or []
-            path = format_path(raw_path, self._db, resolve=self._resolve_path)
+            path = format_path(raw_path, self._db, resolve=self._resolve_path,
+                               src_hash=p.get("_src_hash", ""),
+                               route_type=p.get("_route_type", ""),
+                               hop_size=p.get("_path_hop_size", 1))
             if self._wrap_path:
                 wrap_width = max(20, self.size.width - 58)
                 lines = textwrap.wrap(path, width=wrap_width) or [path]
@@ -500,7 +552,7 @@ class PacketMonitorApp(App):
         self.push_screen(PacketDetailScreen(self._displayed, event.cursor_row, self._db))
 
     def action_toggle_names(self) -> None:
-        self._resolve_path = not self._resolve_path
+        self._resolve_path = (self._resolve_path - 1) % 3
         self._rebuild_table()
         self._set_status(None)
 
@@ -524,7 +576,7 @@ class PacketMonitorApp(App):
         if self._pkt_filters["node"]: parts.append(f"node={markup_escape(self._pkt_filters['node'])}")
         if self._pkt_filters["path_node"]: parts.append(f"path={markup_escape(self._pkt_filters['path_node'])}")
         filt = f"  ({', '.join(parts)})" if parts else ""
-        names = "  path:names" if self._resolve_path else "  path:hops"
+        names = ("  path:names", "  path:src+hex", "  path:hex")[2 - self._resolve_path]
         wrap = "  wrap:on" if self._wrap_path else ""
         count = len(self._all_packets)
         now = datetime.now(timezone.utc).astimezone().strftime("%H:%M:%S")
