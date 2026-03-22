@@ -6,13 +6,24 @@ See README.md for usage, commands, input file format, and data sources.
 
 ## Architecture
 
-The entire tool is a single file: `nodes.py`, exposed as the `nodes` CLI entry point via `[project.scripts]` in `pyproject.toml`. No third-party dependencies.
+CLI entry point: `lma` (defined in `[project.scripts]` in `pyproject.toml`).
+Package: `src/lma/` with a `src/` layout. Tests in `tests/`.
+Dependency: `textual>=0.80` (TUI framework).
+
+**Module layout:**
+- `src/lma/cli.py` — entry point, argparse subcommands (`nodes`, `monitor`)
+- `src/lma/api.py` — letsmesh HTTP client (`fetch_nodes`, `fetch_packets`)
+- `src/lma/db.py` — node database (`load_db`, `save_db`, `parse_input_file`, `update`)
+- `src/lma/nodes.py` — node query/display (`lookup`, `list_nodes`)
+- `src/lma/monitor.py` — live Textual TUI (`PacketMonitorApp`, `run_monitor`)
 
 **Data flow:** `input/*.txt` + live API → `nodes.json` (gitignored)
 
-**Merge logic (`update()`):** Input file nodes with partial keys (< 64 hex chars) are matched against API nodes whose full key starts with that partial. On match, the partial entry is replaced with the full 64-char key, preserving `type` and `routing` from the input file.
+**Merge logic (`update()` in db.py):** Input file nodes with partial keys (< 64 hex chars) are matched against API nodes whose full key starts with that partial. On match, the partial entry is replaced with the full 64-char key, preserving `type` and `routing` from the input file.
 
-**API access:** `https://api.letsmesh.net/api/nodes?region=LUX` requires `Origin: https://analyzer.letsmesh.net` — no auth, undocumented backend of the Angular frontend.
+**API access:** Two endpoints, both require `Origin: https://analyzer.letsmesh.net` — no auth:
+- `https://api.letsmesh.net/api/nodes?region=LUX` — node list
+- `https://api.letsmesh.net/api/packets?region=LUX&limit=50` — recent packets (no WebSocket; poll-based)
 
 **`nodes.json` schema per node:**
 ```json
