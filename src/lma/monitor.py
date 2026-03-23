@@ -12,7 +12,7 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.screen import ModalScreen
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Container, VerticalScroll
 from textual.widgets import DataTable, Footer, Header, Input, Label, Static
 from textual.worker import get_current_worker
 
@@ -388,31 +388,56 @@ class PacketMonitorApp(App):
         Binding("shift+d", "open_detail", "Detail popup"),
         Binding("m", "toggle_map_panel", "Map"),
         Binding("shift+m", "open_map", "Map popup"),
+        Binding("a", "toggle_follow", "Follow"),
+        Binding("l", "toggle_layout", "Layout"),
         Binding("n", "toggle_names", "Names"),
         Binding("w", "toggle_wrap", "Wrap"),
         Binding("c", "clear", "Clear"),
     ]
     CSS = """
+    /* === Main layout (right-panel mode, default) === */
     #main_area {
         height: 1fr;
+        layout: horizontal;
     }
     DataTable {
         width: 1fr;
         height: 1fr;
     }
-    #detail_side {
+    #panel_area {
         display: none;
+        layout: vertical;
         width: 60;
+        height: 1fr;
         border-left: solid $accent;
         background: $surface;
+    }
+    #detail_side {
+        display: none;
+        height: 1fr;
         padding: 1 2;
     }
     MapSidePanel {
         display: none;
-        width: 60;
-        border-left: solid $accent;
-        background: $surface;
+        height: 1fr;
     }
+    /* === Bottom-panel mode === */
+    PacketMonitorApp.panels-bottom #main_area {
+        layout: vertical;
+    }
+    PacketMonitorApp.panels-bottom #panel_area {
+        layout: horizontal;
+        width: 1fr;
+        height: 18;
+        border-left: none;
+        border-top: solid $accent;
+    }
+    PacketMonitorApp.panels-bottom #detail_side,
+    PacketMonitorApp.panels-bottom MapSidePanel {
+        width: 1fr;
+        height: 1fr;
+    }
+    /* === Status bar === */
     #status {
         height: 1;
         background: $panel;
@@ -436,14 +461,17 @@ class PacketMonitorApp(App):
         self._wrap_path: bool = False
         self._detail_panel_open: bool = False
         self._map_panel_open: bool = False
+        self._follow: bool = True
+        self._layout_bottom: bool = False
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        with Horizontal(id="main_area"):
+        with Container(id="main_area"):
             yield DataTable(id="packets")
-            with VerticalScroll(id="detail_side"):
-                yield Static("", id="detail_content", markup=True)
-            yield MapSidePanel(id="map_side")
+            with Container(id="panel_area"):
+                with VerticalScroll(id="detail_side"):
+                    yield Static("", id="detail_content", markup=True)
+                yield MapSidePanel(id="map_side")
         yield Label("", id="status")
         yield Footer()
 
@@ -541,6 +569,12 @@ class PacketMonitorApp(App):
 
     def _rebuild_table(self) -> None:
         table = self.query_one("#packets", DataTable)
+        # Preserve current packet across rebuilds when not following
+        pinned_id: str | None = None
+        if not self._follow and self._displayed:
+            cr = table.cursor_row
+            if cr < len(self._displayed):
+                pinned_id = self._displayed[cr].get("id")
         table.clear()
         self._displayed = [p for p in self._all_packets if self._packet_matches(p)]
         for p in self._displayed:
@@ -568,11 +602,21 @@ class PacketMonitorApp(App):
                 path_cell = path
                 row_height = 1
             table.add_row(time_str, node, ptype, snr, rssi, path_cell, height=row_height, key=p["id"])
+        # Restore cursor: pin to previous packet (no-follow) or stay at 0 (follow)
+        target_row = 0
+        if pinned_id:
+            for i, p in enumerate(self._displayed):
+                if p.get("id") == pinned_id:
+                    target_row = i
+                    break
+        if target_row > 0:
+            table.move_cursor(row=target_row)
+        # Update open side panels (move_cursor won't fire RowHighlighted when row==0)
         if self._displayed:
             if self._detail_panel_open:
-                self._update_detail_side(0)
+                self._update_detail_side(target_row)
             if self._map_panel_open:
-                self._update_map_side(0)
+                self._update_map_side(target_row)
 
     def action_open_detail(self) -> None:
         if not self._displayed:
@@ -606,9 +650,16 @@ class PacketMonitorApp(App):
             return
         self.query_one(MapSidePanel).load_packet(self._displayed, row, self._db)
 
+    def _sync_panel_area(self) -> None:
+        """Show #panel_area iff at least one side panel is open."""
+        self.query_one("#panel_area").display = (
+            self._detail_panel_open or self._map_panel_open
+        )
+
     def action_toggle_detail_panel(self) -> None:
         self._detail_panel_open = not self._detail_panel_open
         self.query_one("#detail_side", VerticalScroll).display = self._detail_panel_open
+        self._sync_panel_area()
         if self._detail_panel_open:
             row = self.query_one("#packets", DataTable).cursor_row
             self._update_detail_side(row)
@@ -616,9 +667,22 @@ class PacketMonitorApp(App):
     def action_toggle_map_panel(self) -> None:
         self._map_panel_open = not self._map_panel_open
         self.query_one(MapSidePanel).display = self._map_panel_open
+        self._sync_panel_area()
         if self._map_panel_open:
             row = self.query_one("#packets", DataTable).cursor_row
             self._update_map_side(row)
+
+    def action_toggle_follow(self) -> None:
+        self._follow = not self._follow
+        self._set_status(None)
+
+    def action_toggle_layout(self) -> None:
+        self._layout_bottom = not self._layout_bottom
+        if self._layout_bottom:
+            self.add_class("panels-bottom")
+        else:
+            self.remove_class("panels-bottom")
+        self._set_status(None)
 
     def action_toggle_names(self) -> None:
         self._resolve_path = (self._resolve_path - 1) % 3
@@ -648,11 +712,13 @@ class PacketMonitorApp(App):
         filt = f"  ({', '.join(parts)})" if parts else ""
         names = ("  path:names", "  path:src+hex", "  path:hex")[2 - self._resolve_path]
         wrap = "  wrap:on" if self._wrap_path else ""
+        follow = "" if self._follow else "  follow:off"
+        layout = "  layout:bottom" if self._layout_bottom else ""
         count = len(self._all_packets)
         now = datetime.now(timezone.utc).astimezone().strftime("%H:%M:%S")
         err = f"  ERROR: {error}" if error else ""
         self.query_one("#status", Label).update(
-            f"{state}{filt}{names}{wrap}  {count} packets  last: {now}{err}"
+            f"{state}{filt}{names}{wrap}{follow}{layout}  {count} packets  last: {now}{err}"
         )
 
     def action_refresh(self) -> None:
