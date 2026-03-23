@@ -164,6 +164,44 @@ class _CachedStaticMap(StaticMap):
         return status, content
 
 
+def _boxes_overlap(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
+    return not (a[2] <= b[0] or b[2] <= a[0] or a[3] <= b[1] or b[3] <= a[1])
+
+
+def _pick_label_pos(draw, font, px: int, py: int, label: str,
+                    placed_boxes: list[tuple[int, int, int, int]],
+                    pad: int = 6) -> tuple[int, int]:
+    """Return (x, y) for the label near marker at (px, py) that avoids placed_boxes.
+
+    Tries eight candidate positions around the marker (right, left, above, below,
+    and diagonals).  Falls back to the default right position if all overlap.
+    """
+    w = int(draw.textlength(label, font=font))
+    M = 14  # margin from marker edge (marker radius ~13 px)
+    candidates = [
+        (M, -10),               # right (default)
+        (M, -50),               # above-right
+        (M, 20),                # below-right
+        (-(w + M), -10),        # left
+        (-(w + M), -50),        # above-left
+        (-(w + M), 20),         # below-left
+        (-w // 2, -(M + 30)),   # above-centre
+        (-w // 2, M + 10),      # below-centre
+    ]
+    for dx, dy in candidates:
+        x, y = px + dx, py + dy
+        bx0, t, bx1, b = draw.textbbox((x, y), label, font=font)
+        bbox = (bx0 - pad, t - pad, bx1 + pad, b + pad)
+        if all(not _boxes_overlap(bbox, existing) for existing in placed_boxes):
+            placed_boxes.append(bbox)
+            return x, y
+    # All positions overlap — use default and record it anyway
+    x, y = px + M, py - 10
+    bx0, t, bx1, b = draw.textbbox((x, y), label, font=font)
+    placed_boxes.append((bx0 - pad, t - pad, bx1 + pad, b + pad))
+    return x, y
+
+
 def _render_tile_map(
     placed: list[tuple[str, str, float, float]],
     path_coords: list[tuple[float, float]],
@@ -201,16 +239,14 @@ def _render_tile_map(
     image = m.render()
     draw = ImageDraw.Draw(image)
 
+    placed_label_boxes: list[tuple[int, int, int, int]] = []
+
     for label, role, lat, lon in placed:
         hex_color, _ = _ROLE_COLORS.get(role, ("#ffffff", "white"))
         px = m._x_to_px(_lon_to_x(lon, m.zoom))
         py = m._y_to_px(_lat_to_y(lat, m.zoom))
-        draw.text(
-            (px + 14, py - 10),
-            label,
-            fill="#000000",
-            font=font,
-        )
+        lx, ly = _pick_label_pos(draw, font, px, py, label, placed_label_boxes)
+        draw.text((lx, ly), label, fill="#000000", font=font)
 
     return image
 
