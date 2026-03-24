@@ -18,7 +18,7 @@ An unofficial CLI client for the [letsmesh analyzer](https://analyzer.letsmesh.n
 lma nodes update [--region REGION]   update database from input files and APIs
 lma nodes lookup <hex_prefix>        find node(s) by key prefix (1+ hex chars)
 lma nodes list [--by-key]            list all nodes (default: sort by name)
-lma monitor [--region REGION] [--poll SECONDS]   live packet monitoring TUI
+lma monitor [--region REGION] [--poll SECONDS] [--channels FILE]   live packet monitoring TUI
 ```
 
 ### Examples
@@ -66,6 +66,33 @@ lma monitor
 **Follow mode** (`a`) is off by default — the cursor stays on the selected packet while new packets arrive in the background. Turn it on to auto-scroll to the newest packet.
 
 **Input-file nodes** (from `input/*.txt`) are highlighted in yellow in the path column and detail panel, making it easy to spot your own nodes in packet paths.
+
+### Channel decryption
+
+The monitor can decrypt GroupText messages if you supply a channels file with the channel keys. Create `channels.txt` in the working directory (gitignored) by appending the output of `get_channels` from [meshcore-cli](https://github.com/ripplingwaves/meshcore-cli):
+
+```sh
+just get-channels               # uses first available device
+just get-channels /dev/ttyUSB0  # specify device explicitly
+```
+
+The output is used directly — no editing required:
+
+```
+0: Public [8b3387e9c5cdea6ac9e5edbaa115cd72]
+1: #wardriving [e3c26491e9cd321e3a6be50d57d54acf]
+2: #chaosstuff [b53025e867806e0b5e241adc0d47358b]
+```
+
+Hashtag channels may also be listed without a key (the key is derived automatically from the channel name):
+
+```
+#luxembourg
+```
+
+The file is loaded automatically if it exists as `channels.txt`, or you can specify a path with `--channels FILE`. When a message is successfully decrypted, the sender name and message text are shown in the detail panel instead of "encrypted".
+
+See `channels.txt.sample` for a template.
 
 ## Data sources
 

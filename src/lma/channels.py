@@ -1,0 +1,187 @@
+"""Channel key management and GroupText/GroupData decryption.
+
+Supports three channel types:
+  - Public channel  : fixed well-known 16-byte key
+  - Hashtag channels: key = SHA256("#name")[:16]  (derived automatically)
+  - Named channels  : explicit 16-byte key supplied by the user
+
+The channels file is compatible with the output of 'get_channels' in meshcore-cli:
+  0: Public [8b3387e9c5cdea6ac9e5edbaa115cd72]
+  1: #wardriving [e3c26491e9cd321e3a6be50d57d54acf]
+  #myhashtagchannel          <- bare hashtag, key derived automatically
+
+Decryption:
+  GroupText/GroupData payloads are AES-128-ECB encrypted.
+  Decrypted plaintext: [uint32 LE timestamp][1-byte flags]["sender_name: message"]
+  The 2-byte MAC is HMAC-SHA256(ciphertext, channel_key)[:2].
+"""
+
+from __future__ import annotations
+
+import hashlib
+import hmac as _hmac
+import re
+import struct
+import warnings
+
+from Crypto.Cipher import AES  # pycryptodome
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+PUBLIC_CHANNEL_KEY = bytes.fromhex("8b3387e9c5cdea6ac9e5edbaa115cd72")
+PUBLIC_CHANNEL_LABEL = "Public"
+
+# Pattern: optional "N: " prefix, then name, then [32hexchars]
+_GET_CHANNELS_RE = re.compile(
+    r"^(?:\d+:\s+)?(.+?)\s+\[([0-9a-fA-F]{32})\]\s*$"
+)
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def load_channels(path: str) -> list[tuple[str, bytes]]:
+    """Parse a channels file and return [(label, key_bytes), ...].
+
+    Accepts 'get_channels' output pasted verbatim, bare hashtag names,
+    and lines starting with '# ' or just '#' (treated as comments).
+    """
+    channels: list[tuple[str, bytes]] = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return channels
+
+    for lineno, raw in enumerate(lines, 1):
+        line = raw.strip()
+        if not line:
+            continue
+        # "# " (hash-space) = comment; "#" alone = comment
+        if line == "#" or line.startswith("# "):
+            continue
+
+        # get_channels format: [N: ] Name [32hexchars]
+        m = _GET_CHANNELS_RE.match(line)
+        if m:
+            name, key_hex = m.group(1).strip(), m.group(2)
+            if name.lower() == "public":
+                channels.append((PUBLIC_CHANNEL_LABEL, PUBLIC_CHANNEL_KEY))
+            else:
+                channels.append((name, bytes.fromhex(key_hex)))
+            continue
+
+        # Bare hashtag: "#word" with no space after "#"
+        if re.match(r"^#\S+$", line):
+            tag = line[1:]  # strip leading #
+            channels.append((line, _derive_hashtag_key(tag)))
+            continue
+
+        warnings.warn(
+            f"channels file line {lineno}: unrecognised format, skipping: {line!r}",
+            stacklevel=2,
+        )
+
+    return channels
+
+
+def build_channel_lookup(
+    channels: list[tuple[str, bytes]],
+) -> dict[int, list[tuple[str, bytes]]]:
+    """Build a map of channel_hash_byte → [(label, key), ...].
+
+    Multiple channels can share the same hash byte (collision); all are tried
+    during decryption and the first whose MAC verifies is accepted.
+    """
+    lookup: dict[int, list[tuple[str, bytes]]] = {}
+    for label, key in channels:
+        h = _channel_hash_byte(key)
+        lookup.setdefault(h, []).append((label, key))
+    return lookup
+
+
+def try_decrypt(
+    channel_hash_byte: int,
+    cipher_mac: bytes,
+    ciphertext: bytes,
+    lookup: dict[int, list[tuple[str, bytes]]],
+) -> dict | None:
+    """Attempt decryption for all channels matching channel_hash_byte.
+
+    Returns the first result whose MAC verifies:
+        {"channel": label, "sender": str, "message": str, "timestamp": int}
+    Returns None if no channel matches or all MAC checks fail.
+    """
+    candidates = lookup.get(channel_hash_byte, [])
+    for label, key in candidates:
+        if not _verify_mac(ciphertext, key, cipher_mac):
+            continue
+        plaintext = _aes_ecb_decrypt(ciphertext, key)
+        if plaintext is None:
+            continue
+        parsed = _parse_decrypted_payload(plaintext)
+        if parsed is None:
+            continue
+        parsed["channel"] = label
+        return parsed
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
+
+def _derive_hashtag_key(name: str) -> bytes:
+    """Derive AES key for a hashtag channel: SHA256("#name")[:16]."""
+    return hashlib.sha256(f"#{name}".encode()).digest()[:16]
+
+
+def _channel_hash_byte(key: bytes) -> int:
+    """First byte of SHA256(channel_key) — stored in plaintext in the packet."""
+    return hashlib.sha256(key).digest()[0]
+
+
+def _verify_mac(ciphertext: bytes, key: bytes, expected: bytes) -> bool:
+    """Check that HMAC-SHA256(ciphertext, key)[:2] == expected."""
+    mac = _hmac.new(key, ciphertext, hashlib.sha256).digest()[:2]
+    return _hmac.compare_digest(mac, expected)
+
+
+def _aes_ecb_decrypt(ciphertext: bytes, key: bytes) -> bytes | None:
+    """AES-128-ECB decrypt and strip null/PKCS7 padding. Returns None on error."""
+    if len(ciphertext) == 0 or len(ciphertext) % 16 != 0:
+        return None
+    try:
+        cipher = AES.new(key, AES.MODE_ECB)
+        plaintext = cipher.decrypt(ciphertext)
+        # Strip PKCS7 padding if valid, otherwise strip null bytes
+        last = plaintext[-1]
+        if 1 <= last <= 16 and plaintext[-last:] == bytes([last]) * last:
+            return plaintext[:-last]
+        return plaintext.rstrip(b"\x00")
+    except Exception:
+        return None
+
+
+def _parse_decrypted_payload(plaintext: bytes) -> dict | None:
+    """Extract timestamp, sender and message from decrypted GroupText payload.
+
+    Format: [uint32 LE timestamp][1-byte flags]["sender_name: message text"]
+    """
+    if len(plaintext) < 6:  # 4 + 1 + at least 1 char
+        return None
+    try:
+        timestamp = struct.unpack_from("<I", plaintext, 0)[0]
+        # flags byte at offset 4 — reserved for future use, ignored for display
+        text = plaintext[5:].decode("utf-8", errors="replace").rstrip("\x00")
+        if ": " in text:
+            sender, _, message = text.partition(": ")
+        else:
+            sender = ""
+            message = text
+        return {"sender": sender, "message": message, "timestamp": timestamp}
+    except Exception:
+        return None

@@ -34,3 +34,9 @@ lookup prefix:
 # Start live packet monitor TUI
 monitor region="LUX" poll="5":
     uv run lma monitor --region {{ region }} --poll {{ poll }}
+
+# Append channels from a meshcore-cli companion to channels.txt (strips numeric prefixes)
+# Usage: just get-channels               (uses first available device)
+#        just get-channels /dev/ttyUSB0  (specify device)
+get-channels connection="":
+    meshcli {{connection}} "get_channels" | sed 's/^[0-9]*: //' >> channels.txt

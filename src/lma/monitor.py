@@ -21,6 +21,7 @@ from lma.letsmesh_api import DEFAULT_REGION, fetch_packets
 from lma.db import is_input_node, learn_from_advert, load_db, resolve_name, save_db
 from lma.decoder import decode_packet
 from lma.map_view import MapSidePanel, PacketMapScreen
+from lma.channels import build_channel_lookup, load_channels, try_decrypt
 
 MAX_PACKETS = 500
 
@@ -185,8 +186,12 @@ def _build_detail_text(packet: dict, db: dict) -> str:
     elif src_hash:
         lines.append(f"[dim]Source:[/dim]     {_fmt_hash(src_hash, db, hop_size)}")
     elif is_group:
-        # GroupText/GroupData encrypt sender identity; no src_hash in plaintext prefix
-        lines.append("[dim]Source:[/dim]     [dim]encrypted[/dim]")
+        # GroupText/GroupData encrypt sender identity; show if decrypted
+        decrypted = p.get("_decrypted")
+        if decrypted and decrypted.get("sender"):
+            lines.append(f"[dim]Source:[/dim]     {markup_escape(decrypted['sender'])}")
+        else:
+            lines.append("[dim]Source:[/dim]     [dim]encrypted[/dim]")
     elif full_path and not is_direct:
         lines.append(f"[dim]Source:[/dim]     {_fmt_hash(full_path[0], db, hop_size)}")
     else:
@@ -220,7 +225,7 @@ def _build_detail_text(packet: dict, db: dict) -> str:
     if dec.get("error"):
         lines.append(f"[dim]Decode error:[/dim] {dec['error']}")
     elif payload_dec:
-        lines += _fmt_payload(ptype, payload_dec, db)
+        lines += _fmt_payload(ptype, payload_dec, db, p)
     elif dec.get("payload_hex"):
         lines.append(f"[dim]Payload:[/dim]    {dec['payload_hex'][:64]}"
                      + ("…" if len(dec.get("payload_hex", "")) > 64 else ""))
@@ -238,7 +243,7 @@ def _build_detail_text(packet: dict, db: dict) -> str:
     return "\n".join(lines)
 
 
-def _fmt_payload(ptype: str, d: dict, db: dict) -> list[str]:
+def _fmt_payload(ptype: str, d: dict, db: dict, packet: dict | None = None) -> list[str]:
     """Format decoded payload fields for the detail view."""
     lines: list[str] = []
 
@@ -257,9 +262,14 @@ def _fmt_payload(ptype: str, d: dict, db: dict) -> list[str]:
         lines.append(f"[dim]Content:[/dim]    encrypted ({d.get('ciphertext_len', 0)} bytes)")
 
     elif ptype in ("GroupText", "GroupData"):
-        lines.append(f"[dim]Channel:[/dim]    {d.get('channel_hash', '-')}")
-        lines.append(f"[dim]MAC:[/dim]        {d.get('cipher_mac', '-')}")
-        lines.append(f"[dim]Content:[/dim]    encrypted ({d.get('ciphertext_len', 0)} bytes)")
+        decrypted = (packet or {}).get("_decrypted")
+        if decrypted:
+            lines.append(f"[dim]Channel:[/dim]    {markup_escape(decrypted['channel'])}")
+            lines.append(f"[dim]Message:[/dim]    {markup_escape(decrypted['message'])}")
+        else:
+            lines.append(f"[dim]Channel:[/dim]    {d.get('channel_hash', '-')}")
+            lines.append(f"[dim]MAC:[/dim]        {d.get('cipher_mac', '-')}")
+            lines.append(f"[dim]Content:[/dim]    encrypted ({d.get('ciphertext_len', 0)} bytes)")
 
     elif ptype == "Trace":
         lines.append(f"[dim]Trace tag:[/dim]  {d.get('trace_tag', '-')}")
@@ -473,10 +483,17 @@ class PacketMonitorApp(App):
     }
     """
 
-    def __init__(self, region: str = DEFAULT_REGION, poll_interval: int = 5):
+    def __init__(
+        self,
+        region: str = DEFAULT_REGION,
+        poll_interval: int = 5,
+        channels_path: str | None = None,
+    ):
         super().__init__()
         self.region = region
         self.poll_interval = poll_interval
+        channels = load_channels(channels_path) if channels_path else []
+        self._channel_lookup = build_channel_lookup(channels)
         self._db: dict = {"nodes": {}}
         self._seen_ids: set[str] = set()
         self._paused = False
@@ -555,6 +572,17 @@ class PacketMonitorApp(App):
                 if learn_from_advert(self._db, pub, name, role, lat, lon):
                     db_dirty = True
                 p["_src_hash"] = pub[:12]
+            # For GroupText/GroupData, attempt decryption with configured channels
+            if (pkt_dec.get("payload_type") in ("GroupText", "GroupData")
+                    and self._channel_lookup):
+                raw_payload = bytes.fromhex(pkt_dec.get("payload_hex", "") or "")
+                if len(raw_payload) >= 3:
+                    ch_byte = raw_payload[0]
+                    mac = raw_payload[1:3]
+                    ciphertext = raw_payload[3:]
+                    result = try_decrypt(ch_byte, mac, ciphertext, self._channel_lookup)
+                    if result:
+                        p["_decrypted"] = result
             self._packets_by_id[p["id"]] = p
         if db_dirty:
             save_db(self._db)
@@ -616,8 +644,11 @@ class PacketMonitorApp(App):
             snr = f"{p['snr']:.1f}" if p.get("snr") is not None else "-"
             rssi = str(p.get("rssi", "-"))
             raw_path = p.get("_path") or []
+            # Use decrypted sender name as source display when available
+            decrypted = p.get("_decrypted") or {}
+            src_display = decrypted.get("sender", "") or p.get("_src_hash", "")
             path = format_path(raw_path, self._db, resolve=self._resolve_path,
-                               src_hash=p.get("_src_hash", ""),
+                               src_hash=src_display,
                                route_type=p.get("_route_type", ""),
                                hop_size=p.get("_path_hop_size", 1),
                                ptype=p.get("payload_type", ""))
@@ -769,5 +800,11 @@ class PacketMonitorApp(App):
         self.push_screen(FilterScreen(self._pkt_filters), apply_filter)
 
 
-def run_monitor(region: str = DEFAULT_REGION, poll_interval: int = 5) -> None:
-    PacketMonitorApp(region=region, poll_interval=poll_interval).run()
+def run_monitor(
+    region: str = DEFAULT_REGION,
+    poll_interval: int = 5,
+    channels_path: str | None = None,
+) -> None:
+    PacketMonitorApp(
+        region=region, poll_interval=poll_interval, channels_path=channels_path
+    ).run()

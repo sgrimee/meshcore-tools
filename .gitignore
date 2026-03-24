@@ -1,4 +1,5 @@
 nodes.json
+channels.txt
 input/*
 !input/example.txt.sample
 .venv/

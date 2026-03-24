@@ -1,0 +1,17 @@
+# MeshCore channel decryption keys
+# Copy-paste the output of 'get_channels' from meshcore-cli directly, e.g.:
+#
+#   sam-g2|*> get_channels
+#   0: Public [8b3387e9c5cdea6ac9e5edbaa115cd72]
+#   1: #wardriving [e3c26491e9cd321e3a6be50d57d54acf]
+#   2: #chaosstuff [b53025e867806e0b5e241adc0d47358b]
+#
+# Hashtag channels may also be listed without a key (key derived automatically):
+#   #mynewchannel
+#
+# Lines starting with "# " are comments. Blank lines are ignored.
+# Copy this file to channels.txt (gitignored) and edit for your setup.
+
+# Paste your get_channels output below:
+# 0: Public [8b3387e9c5cdea6ac9e5edbaa115cd72]
+# 1: #yourhashtagchannel [xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]

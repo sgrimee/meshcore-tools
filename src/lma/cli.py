@@ -32,6 +32,8 @@ def main() -> None:
     monitor_p.add_argument("--region", default=DEFAULT_REGION, metavar="REGION")
     monitor_p.add_argument("--poll", type=int, default=5, metavar="SECONDS",
                            help="polling interval in seconds (default: 5)")
+    monitor_p.add_argument("--channels", metavar="FILE", default=None,
+                           help="channel keys file for decryption (default: channels.txt if present)")
 
     args = parser.parse_args()
 
@@ -47,8 +49,12 @@ def main() -> None:
             list_nodes(by_key=args.by_key)
 
     elif args.command == "monitor":
+        import os
         from lma.monitor import run_monitor
-        run_monitor(region=args.region, poll_interval=args.poll)
+        channels = args.channels
+        if channels is None and os.path.exists("channels.txt"):
+            channels = "channels.txt"
+        run_monitor(region=args.region, poll_interval=args.poll, channels_path=channels)
 
 
 if __name__ == "__main__":
