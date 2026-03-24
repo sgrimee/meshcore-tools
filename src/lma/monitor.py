@@ -63,15 +63,18 @@ def decode_path_from_raw(raw_data: str) -> list[str] | None:
 
 def format_path(path_list: list, db: dict, resolve: int = 2,
                 src_hash: str = "", route_type: str = "",
-                hop_size: int = 1) -> str:
+                hop_size: int = 1, ptype: str = "") -> str:
     """Format: source → relay1 → relay2 → ...
 
     resolve: 2 = all names, 1 = source name + relay hex, 0 = all hex.
     src_hash: authoritative source (from payload or Advert pubkey).
     route_type: "Direct"/"TransportDirect" means path entries are relays, not source.
     hop_size: bytes per hop — used to trim src_hash display to match relay display width.
+    ptype: payload type — GroupText/GroupData have no src_hash by design; path[0] is
+           the last forwarder, not the original sender.
     """
     is_direct = route_type in ("Direct", "TransportDirect")
+    is_group = ptype in ("GroupText", "GroupData")
 
     def _fmt(display: str, node_id: str) -> str:
         return f"[yellow]{display}[/yellow]" if is_input_node(node_id, db) else display
@@ -80,14 +83,21 @@ def format_path(path_list: list, db: dict, resolve: int = 2,
     if src_hash:
         text = resolve_name(src_hash, db) if resolve >= 1 else _trim_hash(src_hash, hop_size)
         src = _fmt(text, src_hash)
+    elif is_group and not is_direct:
+        # GroupText/GroupData encrypt sender identity; path[0] is the last forwarder
+        src = "[dim]enc[/dim]"
     elif path_list and not is_direct:
         text = resolve_name(path_list[0], db) if resolve >= 1 else path_list[0]
         src = _fmt(text, path_list[0])
     else:
         src = "?"
 
-    # Relays: for Direct all path hops are relays; for Flood skip first (= source)
-    relays = path_list if is_direct else path_list[1:]
+    # Relays: for Direct all path hops are relays; for Flood skip first (= source).
+    # For group types all path entries are forwarders (no reliable source in path).
+    if is_group and not is_direct:
+        relays = path_list
+    else:
+        relays = path_list if is_direct else path_list[1:]
 
     if not relays:
         return src
@@ -163,6 +173,7 @@ def _build_detail_text(packet: dict, db: dict) -> str:
     payload_dec = dec.get("decoded") or {}
 
     is_direct = route in ("Direct", "TransportDirect")
+    is_group = ptype in ("GroupText", "GroupData")
 
     # Authoritative source: payload src_hash (all encrypted types) or Advert public_key
     src_hash = payload_dec.get("src_hash", "") or p.get("_src_hash", "")
@@ -173,13 +184,24 @@ def _build_detail_text(packet: dict, db: dict) -> str:
                      f"{resolve_name(advert_pubkey, db)}")
     elif src_hash:
         lines.append(f"[dim]Source:[/dim]     {_fmt_hash(src_hash, db, hop_size)}")
+    elif is_group:
+        # GroupText/GroupData encrypt sender identity; no src_hash in plaintext prefix
+        lines.append("[dim]Source:[/dim]     [dim]encrypted[/dim]")
     elif full_path and not is_direct:
         lines.append(f"[dim]Source:[/dim]     {_fmt_hash(full_path[0], db, hop_size)}")
     else:
         lines.append("[dim]Source:[/dim]     unknown")
 
-    # Relays: for Direct routing all path hops are relays; for Flood skip path[0] (=source)
-    relays = full_path if is_direct else full_path[1:]
+    # Relays: for Direct routing all path hops are relays; for Flood skip path[0] (=source).
+    # For group types path[0] is the last forwarder (sender identity is encrypted),
+    # so show it as "Forwarder" and treat the remaining hops as relays.
+    if is_group and not is_direct:
+        forwarder = full_path[0] if full_path else None
+        relays = full_path[1:]
+        if forwarder:
+            lines.append(f"[dim]Forwarder:[/dim]  {_fmt_hash(forwarder, db, hop_size)}")
+    else:
+        relays = full_path if is_direct else full_path[1:]
     if hop_size > 1:
         lines.append(f"[dim]Path:[/dim]       ({hop_size}-byte node addresses)")
     if relays:
@@ -597,7 +619,8 @@ class PacketMonitorApp(App):
             path = format_path(raw_path, self._db, resolve=self._resolve_path,
                                src_hash=p.get("_src_hash", ""),
                                route_type=p.get("_route_type", ""),
-                               hop_size=p.get("_path_hop_size", 1))
+                               hop_size=p.get("_path_hop_size", 1),
+                               ptype=p.get("payload_type", ""))
             if self._wrap_path:
                 wrap_width = max(20, self.size.width - 58)
                 lines = textwrap.wrap(path, width=wrap_width) or [path]

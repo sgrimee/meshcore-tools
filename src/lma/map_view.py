@@ -82,6 +82,7 @@ def collect_map_nodes(
     ptype = dec.get("payload_type", "")
     route = dec.get("route_type") or packet.get("_route_type", "")
     is_direct = route in ("Direct", "TransportDirect")
+    is_group = ptype in ("GroupText", "GroupData")
     full_path = dec.get("path") or packet.get("_path") or []
 
     placed: list[tuple[str, str, float, float]] = []
@@ -118,7 +119,8 @@ def collect_map_nodes(
             add_node(pub, "source", coords)
     else:
         src_hash = payload_dec.get("src_hash", "") or packet.get("_src_hash", "")
-        if not src_hash and full_path and not is_direct:
+        # GroupText/GroupData encrypt sender identity; path[0] is last forwarder, not source
+        if not src_hash and full_path and not is_direct and not is_group:
             src_hash = full_path[0]
         if src_hash:
             add_node(src_hash, "source")
@@ -127,7 +129,11 @@ def collect_map_nodes(
     if origin_id:
         add_node(origin_id, "observer")
 
-    relays = full_path if is_direct else full_path[1:]
+    # For group types, all path entries are forwarders (source is encrypted)
+    if is_group and not is_direct:
+        relays = full_path
+    else:
+        relays = full_path if is_direct else full_path[1:]
     for hop in relays:
         add_node(hop, "relay")
 
