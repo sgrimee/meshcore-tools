@@ -173,8 +173,7 @@ def _build_detail_text(packet: dict, db: dict) -> str:
             lines.append(f"[dim]Forwarder:[/dim]  {_fmt_hash(forwarder, db, hop_size)}")
     else:
         relays = full_path if is_direct else full_path[1:]
-    if hop_size > 1:
-        lines.append(f"[dim]Path:[/dim]       ({hop_size}-byte node addresses)")
+    lines.append(f"[dim]Path:[/dim]       {hop_size}-byte addresses")
     if relays:
         lines.append("[dim]Relays:[/dim]")
         for hop in relays:
@@ -195,6 +194,11 @@ def _build_detail_text(packet: dict, db: dict) -> str:
     elif dec.get("payload_hex"):
         lines.append(f"[dim]Payload:[/dim]    {dec['payload_hex'][:64]}"
                      + ("…" if len(dec.get("payload_hex", "")) > 64 else ""))
+
+    raw_data = p.get("raw_data", "")
+    if raw_data:
+        lines.append("")
+        lines.append(f"[dim]Raw:[/dim]        {raw_data}")
 
     regions = p.get("regions") or []
     if regions:
