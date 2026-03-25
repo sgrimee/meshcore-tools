@@ -159,6 +159,8 @@ def decode_packet(raw_data: str) -> dict[str, Any]:
             result["decoded"] = _decode_trace(payload)
         elif payload_type == PAYLOAD_ACK:
             result["decoded"] = _decode_ack(payload)
+        elif payload_type == PAYLOAD_PATH:
+            result["decoded"] = _decode_path(payload, hash_size)
         else:
             result["decoded"] = {}
 
@@ -303,3 +305,28 @@ def _decode_trace(payload: bytes) -> dict[str, Any]:
 def _decode_ack(payload: bytes) -> dict[str, Any]:
     """ACK(0x03) — minimal fixed payload."""
     return {"raw": payload.hex(), "length": len(payload)}
+
+
+def _decode_path(payload: bytes, hash_size: int) -> dict[str, Any]:
+    """PATH(0x08) — route discovery probe/reply.
+
+    Layout:
+      [0..hash_size-1]              src_hash   sender's node hash
+      [hash_size..2*hash_size-1]    dst_hash   destination node hash (if present)
+      [2*hash_size+]                extra      additional hop hashes (if any)
+    """
+    if len(payload) < hash_size:
+        return {"error": f"Too short for Path ({len(payload)} < {hash_size} bytes)"}
+
+    result: dict[str, Any] = {
+        "src_hash": payload[0:hash_size].hex(),
+    }
+    if len(payload) >= 2 * hash_size:
+        result["dst_hash"] = payload[hash_size:2 * hash_size].hex()
+    extra = payload[2 * hash_size:]
+    if extra:
+        result["extra_hops"] = [
+            extra[i * hash_size:(i + 1) * hash_size].hex()
+            for i in range(len(extra) // hash_size)
+        ]
+    return result

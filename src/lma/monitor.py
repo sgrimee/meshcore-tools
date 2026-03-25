@@ -281,6 +281,13 @@ def _fmt_payload(ptype: str, d: dict, db: dict, packet: dict | None = None) -> l
     elif ptype == "Ack":
         lines.append(f"[dim]Payload:[/dim]    {d.get('raw', '-')} ({d.get('length', 0)} bytes)")
 
+    elif ptype == "Path":
+        if d.get("dst_hash"):
+            lines.append(f"[dim]Dest hash:[/dim]  {_fmt_hash(d['dst_hash'], db)}")
+        extra = d.get("extra_hops", [])
+        if extra:
+            lines.append(f"[dim]Extra hops:[/dim] {', '.join(extra)}")
+
     elif d.get("error"):
         lines.append(f"[dim]Error:[/dim]      {d['error']}")
     else:
