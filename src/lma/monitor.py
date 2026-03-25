@@ -198,7 +198,19 @@ def _build_detail_text(packet: dict, db: dict) -> str:
     raw_data = p.get("raw_data", "")
     if raw_data:
         lines.append("")
-        lines.append(f"[dim]Raw:[/dim]        {raw_data}")
+        raw_display = raw_data
+        if full_path or advert_pubkey:
+            is_transport = route in ("TransportFlood", "TransportDirect")
+            first_hop_byte = 6 if is_transport else 2
+            start = first_hop_byte * 2
+            end = start + hop_size * 2
+            if len(raw_data) >= end:
+                raw_display = (
+                    raw_data[:start]
+                    + f"[bold yellow]{raw_data[start:end]}[/bold yellow]"
+                    + raw_data[end:]
+                )
+        lines.append(f"[dim]Raw:[/dim]        {raw_display}")
 
     regions = p.get("regions") or []
     if regions:
