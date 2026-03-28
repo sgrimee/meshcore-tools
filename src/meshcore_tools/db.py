@@ -60,7 +60,7 @@ def learn_from_advert(
         "source": "advert",
         "key_complete": True,
     }
-    if lat is not None and lon is not None:
+    if lat is not None and lon is not None and (lat != 0.0 or lon != 0.0):
         entry["lat"] = lat
         entry["lon"] = lon
     db["nodes"][key] = entry

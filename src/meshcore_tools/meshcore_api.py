@@ -44,6 +44,6 @@ def fetch_node_coords() -> dict[str, dict]:
             continue
         lat = expanded.get("lat")
         lon = expanded.get("lon")
-        if lat is not None and lon is not None:
+        if lat is not None and lon is not None and (float(lat) != 0.0 or float(lon) != 0.0):
             coords[key] = {"lat": float(lat), "lon": float(lon)}
     return coords
