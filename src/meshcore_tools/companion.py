@@ -89,6 +89,25 @@ class ContactsUpdated(Message):
 
 
 # ---------------------------------------------------------------------------
+# Error translation
+# ---------------------------------------------------------------------------
+
+def _ble_error_message(exc: Exception) -> str:
+    """Return a plain-English error message for common BLE/connection failures."""
+    msg = str(exc)
+    if "NotPermitted" in msg:
+        return "BLE: another app is already connected to this device. Disconnect it first."
+    if "NotFound" in msg or "DeviceNotFound" in msg:
+        return "BLE device not found. Is it turned on and in range?"
+    if "NotConnected" in msg:
+        return "BLE connection lost. Try again."
+    # Strip noisy BlueZ DBus prefix for everything else
+    if "org.bluez.Error" in msg:
+        return f"BLE error: {msg.split('] ', 1)[-1]}" if '] ' in msg else f"BLE error: {msg}"
+    return msg
+
+
+# ---------------------------------------------------------------------------
 # CompanionManager — async bridge
 # ---------------------------------------------------------------------------
 
@@ -139,7 +158,7 @@ class CompanionManager:
                 )
                 return
         except Exception as exc:
-            self._app.post_message(CompanionConnectionError(reason=str(exc)))
+            self._app.post_message(CompanionConnectionError(reason=_ble_error_message(exc)))
             return
 
         self._connected = True
