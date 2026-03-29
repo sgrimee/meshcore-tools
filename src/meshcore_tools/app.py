@@ -95,7 +95,13 @@ class MeshCoreApp(App):
         self.companion = CompanionManager(self)
         config = load_connection_config()
         if config is not None:
-            self._do_connect(config)
+            if config.type == "ble":
+                # BLE auto-connect requires a fresh device scan (Bleak on Linux
+                # runs an internal scan when connecting by MAC alone, which
+                # blocks any concurrent manual scan). Prompt user to scan instead.
+                self.sub_title += "  BLE — press C to scan and connect"
+            else:
+                self._do_connect(config)
 
     def action_switch_tab(self, tab_id: str) -> None:
         if tab_id in ("tab_chat", "tab_repeaters") and not COMPANION_AVAILABLE:

@@ -36,6 +36,8 @@ class ConnectionConfig:
     device: str | None = None
     ble_name: str | None = None
     ble_pin: str | None = None
+    # Not serialized — holds a freshly scanned BLEDevice for reliable connect.
+    ble_device: object | None = None
 
 
 def load_connection_config(config_dir: Path = _DEFAULT_CONFIG_DIR) -> ConnectionConfig | None:
@@ -60,7 +62,7 @@ def save_connection_config(
     """Persist config as JSON, creating parent directories as needed."""
     config_dir.mkdir(parents=True, exist_ok=True)
     path = config_dir / "connection.json"
-    data = {k: v for k, v in asdict(config).items() if v is not None}
+    data = {k: v for k, v in asdict(config).items() if v is not None and k != "ble_device"}
     path.write_text(json.dumps(data, indent=2))
 
 
@@ -68,21 +70,6 @@ def list_serial_ports() -> list[tuple[str, str]]:
     """Return (display_label, port_path) pairs for available serial ports, sorted by port."""
     ports = serial.tools.list_ports.comports()
     return [(f"{port} — {desc}", port) for port, desc, _ in sorted(ports)]
-
-
-def format_ble_devices(devices: list) -> list[tuple[str, str]]:
-    """Return (display_label, address) pairs for MeshCore companion BLE devices.
-
-    Filters to devices whose name starts with "MeshCore" (same criterion used
-    by meshcore-cli and ble_cx.py). Value is the MAC address so
-    MeshCore.create_ble() connects directly by address, bypassing the
-    name-based scan filter in ble_cx.py.
-    """
-    result = []
-    for d in devices:
-        if d.name and d.name.startswith("MeshCore"):
-            result.append((f"{d.name}  {d.address}", d.address))
-    return result
 
 
 async def _known_ble_devices() -> list[tuple[str, str]]:
@@ -164,6 +151,7 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
     def __init__(self, current: ConnectionConfig | None = None) -> None:
         super().__init__()
         self._current = current or ConnectionConfig(type="tcp")
+        self._ble_devices: dict[str, object] = {}  # address → BLEDevice
 
     def compose(self) -> ComposeResult:
         with Container():
@@ -271,7 +259,7 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
 
         scan_btn.display = False
         loading.display = True
-        status.update("")
+        status.update("Scanning for BLE devices…")
 
         try:
             if not _BLEAK_AVAILABLE:
@@ -279,7 +267,13 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
                     "bleak not installed. Run: pip install meshcore-tools[companion]"
                 )
             devices = await BleakScanner.discover(timeout=5.0)
-            options = format_ble_devices(devices)
+            # Build options and keep BLEDevice objects for reliable connect
+            self._ble_devices = {}
+            options = []
+            for d in devices:
+                if d.name and d.name.startswith("MeshCore"):
+                    options.append((f"{d.name}  {d.address}", d.address))
+                    self._ble_devices[d.address] = d
             # Merge in paired/cached devices from BlueZ that weren't advertising
             known = await _known_ble_devices()
             seen = {addr for _, addr in options}
@@ -289,6 +283,7 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
                 ble_sel.value = options[0][1]
                 ble_sel.display = True
                 self.query_one("#ble-pin-section").display = True
+                status.update("")
             else:
                 status.update("No MeshCore devices found.")
                 scan_btn.display = True
@@ -339,8 +334,14 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
             val = self.query_one("#ble-select", Select).value
             if val is Select.NULL:
                 return
+            addr = str(val)
             pin = self.query_one("#ble_pin", Input).value.strip() or None
-            config = ConnectionConfig(type="ble", ble_name=str(val), ble_pin=pin)
+            config = ConnectionConfig(
+                type="ble",
+                ble_name=addr,
+                ble_pin=pin,
+                ble_device=self._ble_devices.get(addr),
+            )
         else:
             return
         self.dismiss(config)

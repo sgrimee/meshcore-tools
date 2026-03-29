@@ -110,8 +110,8 @@ def _ble_error_message(exc: Exception) -> str:
     return msg
 
 
-async def _ble_flush_stale(name: str) -> None:
-    """Connect to a BLE device by name fragment and disconnect immediately.
+async def _ble_flush_stale(address: str) -> None:
+    """Connect to a BLE device and disconnect immediately.
 
     This forces BlueZ to close any abandoned connection left by a previous
     failed attempt (ble_cx.py does not call disconnect() when start_notify
@@ -120,10 +120,13 @@ async def _ble_flush_stale(name: str) -> None:
     try:
         from bleak import BleakScanner, BleakClient
 
-        def _match(d, _):
-            return bool(d.name and name in d.name)
+        if ":" in address:
+            device = await BleakScanner.find_device_by_address(address, timeout=5.0)
+        else:
+            def _match(d, _):
+                return bool(d.name and address in d.name)
+            device = await BleakScanner.find_device_by_filter(_match, timeout=5.0)
 
-        device = await BleakScanner.find_device_by_filter(_match, timeout=5.0)
         if device:
             client = BleakClient(device)
             await client.connect()
@@ -176,18 +179,29 @@ class CompanionManager:
             elif config.type == "serial":
                 self._client = await MeshCore.create_serial(config.device or "")
             elif config.type == "ble":
+                ble_addr = config.ble_name or ""
+                # Use a freshly scanned BLEDevice when available (set by
+                # ConnectScreen after a manual scan) — this is more reliable
+                # than connecting by MAC address alone, because BlueZ may not
+                # have the device in its cache on startup.
+                ble_device = getattr(config, "ble_device", None)
                 try:
-                    self._client = await MeshCore.create_ble(
-                        config.ble_name or "", pin=config.ble_pin
-                    )
+                    if ble_device is not None:
+                        self._client = await MeshCore.create_ble(
+                            device=ble_device, pin=config.ble_pin
+                        )
+                    else:
+                        self._client = await MeshCore.create_ble(
+                            ble_addr, pin=config.ble_pin
+                        )
                 except Exception as exc:
                     if "NotPermitted" not in str(exc):
                         raise
                     # Stale BleakClient left connected by previous failed attempt.
                     # Flush it and retry once.
-                    await _ble_flush_stale(config.ble_name or "")
+                    await _ble_flush_stale(ble_addr)
                     self._client = await MeshCore.create_ble(
-                        config.ble_name or "", pin=config.ble_pin
+                        ble_addr, pin=config.ble_pin
                     )
             else:
                 self._app.post_message(
