@@ -126,3 +126,16 @@ def test_format_ble_devices_multiple():
     assert len(result) == 2
     assert result[0] == ("MeshCore-1 (AA:AA:AA:AA:AA:AA)", "MeshCore-1")
     assert result[1] == ("MeshCore-2 (CC:CC:CC:CC:CC:CC)", "MeshCore-2")
+
+
+# --- ConnectScreen structural tests ---
+
+
+def test_connect_screen_has_three_sections():
+    """ConnectScreen.compose must yield tcp-section, serial-section, and ble-section."""
+    import inspect
+    from meshcore_tools.connection import ConnectScreen
+    src = inspect.getsource(ConnectScreen.compose)
+    assert '"tcp-section"' in src or "'tcp-section'" in src
+    assert '"serial-section"' in src or "'serial-section'" in src
+    assert '"ble-section"' in src or "'ble-section'" in src

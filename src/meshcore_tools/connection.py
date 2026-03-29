@@ -9,8 +9,9 @@ from pathlib import Path
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label, Select, Static
+from textual.widgets import Button, Input, Label, LoadingIndicator, Select, Static
 from textual.containers import Container
+from textual import work
 
 import serial.tools.list_ports
 
@@ -104,6 +105,13 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
     ConnectScreen Button {
         margin-right: 1;
     }
+    ConnectScreen LoadingIndicator {
+        height: 3;
+    }
+    ConnectScreen #ble-status {
+        margin-top: 1;
+        color: $warning;
+    }
     """
 
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
@@ -122,30 +130,28 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
                 id="conn_type",
                 allow_blank=False,
             )
-            yield Label("Host (TCP only):")
-            yield Input(
-                value=self._current.host or "",
-                placeholder="192.168.1.5",
-                id="host",
-            )
-            yield Label("Port (TCP only):")
-            yield Input(
-                value=str(self._current.port or 5000),
-                placeholder="5000",
-                id="port",
-            )
-            yield Label("Device path (Serial only):")
-            yield Input(
-                value=self._current.device or "",
-                placeholder="/dev/ttyUSB0",
-                id="device",
-            )
-            yield Label("BLE device name (BLE only):")
-            yield Input(
-                value=self._current.ble_name or "",
-                placeholder="MyNode",
-                id="ble_name",
-            )
+            with Container(id="tcp-section"):
+                yield Label("Host (TCP only):")
+                yield Input(
+                    value=self._current.host or "",
+                    placeholder="192.168.1.5",
+                    id="host",
+                )
+                yield Label("Port (TCP only):")
+                yield Input(
+                    value=str(self._current.port or 5000),
+                    placeholder="5000",
+                    id="port",
+                )
+            with Container(id="serial-section"):
+                yield Label("Serial port:")
+                yield Select([], id="serial-select", allow_blank=True)
+                yield Button("Refresh", id="btn_serial_refresh", variant="default")
+            with Container(id="ble-section"):
+                yield Button("Scan for BLE devices", id="btn_ble_scan", variant="default")
+                yield LoadingIndicator(id="ble-loading")
+                yield Select([], id="ble-select", allow_blank=True)
+                yield Static("", id="ble-status", markup=False)
             with Container(id="buttons"):
                 yield Button("Connect", variant="primary", id="btn_connect")
                 yield Button("Cancel", id="btn_cancel")
