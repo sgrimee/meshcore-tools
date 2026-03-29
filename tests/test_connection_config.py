@@ -100,20 +100,24 @@ def test_format_ble_devices_empty():
     assert format_ble_devices([]) == []
 
 
-def test_format_ble_devices_filters_non_meshcore():
+def test_format_ble_devices_includes_non_meshcore():
+    """All named devices are included regardless of name prefix."""
     devices = [_make_ble_device("SomeOtherDevice", "AA:BB:CC:DD:EE:FF")]
-    assert format_ble_devices(devices) == []
+    result = format_ble_devices(devices)
+    assert result == [("SomeOtherDevice (AA:BB:CC:DD:EE:FF)", "AA:BB:CC:DD:EE:FF")]
 
 
-def test_format_ble_devices_includes_meshcore():
+def test_format_ble_devices_value_is_address():
+    """Value stored in Select is the MAC address, not the device name."""
     devices = [_make_ble_device("MeshCore-abc", "11:22:33:44:55:66")]
     result = format_ble_devices(devices)
-    assert result == [("MeshCore-abc (11:22:33:44:55:66)", "MeshCore-abc")]
+    assert result == [("MeshCore-abc (11:22:33:44:55:66)", "11:22:33:44:55:66")]
 
 
-def test_format_ble_devices_skips_none_name():
+def test_format_ble_devices_no_name_uses_address_as_label():
     devices = [_make_ble_device(None, "11:22:33:44:55:66")]
-    assert format_ble_devices(devices) == []
+    result = format_ble_devices(devices)
+    assert result == [("11:22:33:44:55:66", "11:22:33:44:55:66")]
 
 
 def test_format_ble_devices_multiple():
@@ -123,9 +127,10 @@ def test_format_ble_devices_multiple():
         _make_ble_device("MeshCore-2", "CC:CC:CC:CC:CC:CC"),
     ]
     result = format_ble_devices(devices)
-    assert len(result) == 2
-    assert result[0] == ("MeshCore-1 (AA:AA:AA:AA:AA:AA)", "MeshCore-1")
-    assert result[1] == ("MeshCore-2 (CC:CC:CC:CC:CC:CC)", "MeshCore-2")
+    assert len(result) == 3
+    assert result[0] == ("MeshCore-1 (AA:AA:AA:AA:AA:AA)", "AA:AA:AA:AA:AA:AA")
+    assert result[1] == ("Unrelated (BB:BB:BB:BB:BB:BB)", "BB:BB:BB:BB:BB:BB")
+    assert result[2] == ("MeshCore-2 (CC:CC:CC:CC:CC:CC)", "CC:CC:CC:CC:CC:CC")
 
 
 # --- ConnectScreen structural tests ---

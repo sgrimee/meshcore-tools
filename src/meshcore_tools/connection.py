@@ -70,11 +70,15 @@ def list_serial_ports() -> list[tuple[str, str]]:
 
 
 def format_ble_devices(devices: list) -> list[tuple[str, str]]:
-    """Return (display_label, device_name) pairs for MeshCore BLE devices."""
+    """Return (display_label, address) pairs for all named BLE devices.
+
+    The value is the MAC address so MeshCore.create_ble() connects directly
+    by address, bypassing the MeshCore-name filter in ble_cx.py.
+    """
     result = []
     for d in devices:
-        if d.name and d.name.startswith("MeshCore"):
-            result.append((f"{d.name} ({d.address})", d.name))
+        label = f"{d.name} ({d.address})" if d.name else d.address
+        result.append((label, d.address))
     return result
 
 
