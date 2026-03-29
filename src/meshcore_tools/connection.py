@@ -34,6 +34,7 @@ class ConnectionConfig:
     port: int | None = None
     device: str | None = None
     ble_name: str | None = None
+    ble_pin: str | None = None
 
 
 def load_connection_config(config_dir: Path = _DEFAULT_CONFIG_DIR) -> ConnectionConfig | None:
@@ -48,6 +49,7 @@ def load_connection_config(config_dir: Path = _DEFAULT_CONFIG_DIR) -> Connection
         port=data.get("port"),
         device=data.get("device"),
         ble_name=data.get("ble_name"),
+        ble_pin=data.get("ble_pin"),
     )
 
 
@@ -151,6 +153,13 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
                 yield LoadingIndicator(id="ble-loading")
                 yield Select([], id="ble-select", allow_blank=True)
                 yield Static("", id="ble-status", markup=False)
+                yield Label("PIN (optional, for pairing):")
+                yield Input(
+                    value=self._current.ble_pin or "",
+                    placeholder="leave blank if not required",
+                    id="ble_pin",
+                    password=True,
+                )
             with Container(id="buttons"):
                 yield Button("Connect", variant="primary", id="btn_connect")
                 yield Button("Cancel", id="btn_cancel")
@@ -278,7 +287,8 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
             val = self.query_one("#ble-select", Select).value
             if val is Select.NULL:
                 return
-            config = ConnectionConfig(type="ble", ble_name=str(val))
+            pin = self.query_one("#ble_pin", Input).value.strip() or None
+            config = ConnectionConfig(type="ble", ble_name=str(val), ble_pin=pin)
         else:
             return
         self.dismiss(config)

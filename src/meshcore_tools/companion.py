@@ -151,7 +151,9 @@ class CompanionManager:
             elif config.type == "serial":
                 self._client = await MeshCore.create_serial(config.device or "")
             elif config.type == "ble":
-                self._client = await MeshCore.create_ble(config.ble_name or "")
+                self._client = await MeshCore.create_ble(
+                    config.ble_name or "", pin=config.ble_pin
+                )
             else:
                 self._app.post_message(
                     CompanionConnectionError(reason=f"unknown type: {config.type}")
