@@ -8,6 +8,7 @@ dependencies = ["textual>=0.80", "msgpack>=1.0", "pycryptodome>=3.19"]
 
 [project.optional-dependencies]
 map = ["textual-image", "staticmap", "Pillow"]
+companion = ["meshcore>=2.3.3"]
 
 [project.scripts]
 meshcore-tools = "meshcore_tools.cli:main"
