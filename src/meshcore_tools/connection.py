@@ -96,6 +96,7 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
                 [("TCP", "tcp"), ("Serial", "serial"), ("BLE", "ble")],
                 value=self._current.type,
                 id="conn_type",
+                allow_blank=False,
             )
             yield Label("Host (TCP only):")
             yield Input(
@@ -136,14 +137,19 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
 
     def _submit(self) -> None:
         conn_type = str(self.query_one("#conn_type", Select).value)
-        try:
-            port = int(self.query_one("#port", Input).value)
-        except ValueError:
-            port = 5000
+        port_str = self.query_one("#port", Input).value.strip()
+        if conn_type == "tcp":
+            try:
+                port = int(port_str)
+            except ValueError:
+                self.query_one("#port", Input).focus()
+                return  # don't dismiss — keep modal open for correction
+        else:
+            port = None
         config = ConnectionConfig(
             type=conn_type,
             host=self.query_one("#host", Input).value.strip() or None,
-            port=port if conn_type == "tcp" else None,
+            port=port,
             device=self.query_one("#device", Input).value.strip() or None,
             ble_name=self.query_one("#ble_name", Input).value.strip() or None,
         )
