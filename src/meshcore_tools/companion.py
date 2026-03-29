@@ -200,6 +200,7 @@ class CompanionManager:
         """Disconnect from the companion device."""
         if self._client is None:
             return
+        was_connected = self._connected
         try:
             await self._client.stop_auto_message_fetching()
             await self._client.disconnect()
@@ -208,6 +209,8 @@ class CompanionManager:
         finally:
             self._client = None
             self._connected = False
+        if was_connected:
+            self._app.post_message(CompanionDisconnected())
 
     @property
     def contacts(self) -> list[dict]:

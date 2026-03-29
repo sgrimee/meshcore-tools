@@ -148,7 +148,12 @@ class ChatTab(TabPane):
         self.query_one("#msg_log", VerticalScroll).scroll_end(animate=False)
 
     def populate_channels(self, contacts: list[dict]) -> None:
-        """Called by MeshCoreApp after companion connects with fresh contacts."""
+        """Called by MeshCoreApp after companion connects with fresh contacts.
+
+        TODO: Populate additional channels from contacts list (e.g. per-contact
+        private channels). Currently only the #public broadcast channel (idx=0)
+        is shown.
+        """
         self._channels = [{"idx": 0, "name": "#public"}]
         strip = self.query_one("#channel_strip", Container)
         strip.remove_children()

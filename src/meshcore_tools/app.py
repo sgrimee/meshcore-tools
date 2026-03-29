@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from rich.markup import escape as markup_escape
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -132,7 +133,8 @@ class MeshCoreApp(App):
         await self.companion.connect(config)
 
     def on_companion_connected(self, message: "CompanionConnected") -> None:
-        self.sub_title = f"region={self._region}  companion: {message.node_name} [connected]"
+        name = markup_escape(message.node_name)
+        self.sub_title = f"region={self._region}  companion: {name} [connected]"
 
     def on_companion_disconnected(self, _: "CompanionDisconnected") -> None:
         self.sub_title = f"region={self._region}  companion: [disconnected]"
@@ -144,7 +146,8 @@ class MeshCoreApp(App):
                 pass
 
     def on_companion_connection_error(self, message: "CompanionConnectionError") -> None:
-        self.sub_title = f"region={self._region}  companion error: {message.reason}"
+        reason = markup_escape(message.reason)
+        self.sub_title = f"region={self._region}  companion error: {reason}"
 
     def on_contacts_updated(self, message: "ContactsUpdated") -> None:
         if not COMPANION_AVAILABLE:
