@@ -139,3 +139,27 @@ def test_connect_screen_has_three_sections():
     assert '"tcp-section"' in src or "'tcp-section'" in src
     assert '"serial-section"' in src or "'serial-section'" in src
     assert '"ble-section"' in src or "'ble-section'" in src
+
+
+def test_connect_screen_on_mount_calls_show_section():
+    import inspect
+    from meshcore_tools.connection import ConnectScreen
+    src = inspect.getsource(ConnectScreen.on_mount)
+    assert "_show_section" in src
+
+
+def test_connect_screen_has_populate_serial():
+    import inspect
+    from meshcore_tools.connection import ConnectScreen
+    src = inspect.getsource(ConnectScreen._populate_serial_ports)
+    assert "list_serial_ports" in src
+    assert "serial-select" in src
+
+
+def test_connect_screen_update_connect_button_checks_type():
+    import inspect
+    from meshcore_tools.connection import ConnectScreen
+    src = inspect.getsource(ConnectScreen._update_connect_button)
+    assert '"tcp"' in src
+    assert '"serial"' in src
+    assert '"ble"' in src

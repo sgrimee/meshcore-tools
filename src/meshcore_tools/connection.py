@@ -156,31 +156,130 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
                 yield Button("Connect", variant="primary", id="btn_connect")
                 yield Button("Cancel", id="btn_cancel")
 
+    def on_mount(self) -> None:
+        self.query_one("#ble-loading").display = False
+        self.query_one("#ble-select").display = False
+        self._show_section(self._current.type)
+        if self._current.type == "serial":
+            self._populate_serial_ports()
+
+    def _show_section(self, conn_type: str) -> None:
+        self.query_one("#tcp-section").display = (conn_type == "tcp")
+        self.query_one("#serial-section").display = (conn_type == "serial")
+        self.query_one("#ble-section").display = (conn_type == "ble")
+        self._update_connect_button()
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "conn_type":
+            self._show_section(str(event.value))
+            if str(event.value) == "serial":
+                self._populate_serial_ports()
+        else:
+            self._update_connect_button()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "host":
+            self._update_connect_button()
+
+    def _populate_serial_ports(self) -> None:
+        ports = list_serial_ports()
+        sel = self.query_one("#serial-select", Select)
+        if ports:
+            sel.set_options(ports)
+            sel.disabled = False
+        else:
+            sel.set_options([("No ports found", "")])
+            sel.disabled = True
+        self._update_connect_button()
+
+    def _update_connect_button(self) -> None:
+        conn_type = str(self.query_one("#conn_type", Select).value)
+        btn = self.query_one("#btn_connect", Button)
+        if conn_type == "tcp":
+            btn.disabled = not bool(self.query_one("#host", Input).value.strip())
+        elif conn_type == "serial":
+            sel = self.query_one("#serial-select", Select)
+            btn.disabled = sel.value is Select.NULL or sel.disabled
+        elif conn_type == "ble":
+            sel = self.query_one("#ble-select", Select)
+            btn.disabled = sel.value is Select.NULL or not sel.display
+        else:
+            btn.disabled = True
+
+    @work
+    async def _scan_ble(self) -> None:
+        scan_btn = self.query_one("#btn_ble_scan", Button)
+        loading = self.query_one("#ble-loading", LoadingIndicator)
+        ble_sel = self.query_one("#ble-select", Select)
+        status = self.query_one("#ble-status", Static)
+
+        scan_btn.display = False
+        loading.display = True
+        status.update("")
+
+        try:
+            if not _BLEAK_AVAILABLE:
+                raise ImportError(
+                    "bleak not installed. Run: pip install meshcore-tools[companion]"
+                )
+            devices = await BleakScanner.discover(timeout=5.0)
+            options = format_ble_devices(devices)
+            if options:
+                ble_sel.set_options(options)
+                ble_sel.display = True
+            else:
+                status.update("No MeshCore devices found.")
+                scan_btn.display = True
+        except ImportError as exc:
+            status.update(str(exc))
+            scan_btn.display = True
+        except Exception as exc:
+            status.update(
+                f"Bluetooth error: {exc}\nTry: sudo usermod -aG bluetooth $USER"
+            )
+            scan_btn.display = True
+        finally:
+            loading.display = False
+
+        self._update_connect_button()
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn_cancel":
             self.dismiss(None)
         elif event.button.id == "btn_connect":
             self._submit()
+        elif event.button.id == "btn_serial_refresh":
+            self._populate_serial_ports()
+        elif event.button.id == "btn_ble_scan":
+            self._scan_ble()
 
     def action_cancel(self) -> None:
         self.dismiss(None)
 
     def _submit(self) -> None:
         conn_type = str(self.query_one("#conn_type", Select).value)
-        port_str = self.query_one("#port", Input).value.strip()
         if conn_type == "tcp":
+            port_str = self.query_one("#port", Input).value.strip()
             try:
                 port = int(port_str)
             except ValueError:
                 self.query_one("#port", Input).focus()
-                return  # don't dismiss — keep modal open for correction
+                return
+            config = ConnectionConfig(
+                type="tcp",
+                host=self.query_one("#host", Input).value.strip() or None,
+                port=port,
+            )
+        elif conn_type == "serial":
+            config = ConnectionConfig(
+                type="serial",
+                device=str(self.query_one("#serial-select", Select).value),
+            )
+        elif conn_type == "ble":
+            config = ConnectionConfig(
+                type="ble",
+                ble_name=str(self.query_one("#ble-select", Select).value),
+            )
         else:
-            port = None
-        config = ConnectionConfig(
-            type=conn_type,
-            host=self.query_one("#host", Input).value.strip() or None,
-            port=port,
-            device=self.query_one("#device", Input).value.strip() or None,
-            ble_name=self.query_one("#ble_name", Input).value.strip() or None,
-        )
+            return
         self.dismiss(config)
