@@ -153,13 +153,14 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
                 yield LoadingIndicator(id="ble-loading")
                 yield Select([], id="ble-select", allow_blank=True)
                 yield Static("", id="ble-status", markup=False)
-                yield Label("PIN (optional, for pairing):")
-                yield Input(
-                    value=self._current.ble_pin or "",
-                    placeholder="leave blank if not required",
-                    id="ble_pin",
-                    password=True,
-                )
+                with Container(id="ble-pin-section"):
+                    yield Label("PIN (optional, for pairing):")
+                    yield Input(
+                        value=self._current.ble_pin or "",
+                        placeholder="leave blank if not required",
+                        id="ble_pin",
+                        password=True,
+                    )
             with Container(id="buttons"):
                 yield Button("Connect", variant="primary", id="btn_connect")
                 yield Button("Cancel", id="btn_cancel")
@@ -167,6 +168,7 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
     def on_mount(self) -> None:
         self.query_one("#ble-loading").display = False
         self.query_one("#ble-select").display = False
+        self.query_one("#ble-pin-section").display = False
         self._show_section(self._current.type)
         if self._current.type == "serial":
             self._populate_serial_ports()
@@ -182,6 +184,9 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
             self._show_section(str(event.value))
             if str(event.value) == "serial":
                 self._populate_serial_ports()
+        elif event.select.id == "ble-select":
+            self.query_one("#ble-pin-section").display = (event.value is not Select.NULL)
+            self._update_connect_button()
         else:
             self._update_connect_button()
 
@@ -234,7 +239,9 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
             options = format_ble_devices(devices)
             if options:
                 ble_sel.set_options(options)
+                ble_sel.value = options[0][1]
                 ble_sel.display = True
+                self.query_one("#ble-pin-section").display = True
             else:
                 status.update("No MeshCore devices found.")
                 scan_btn.display = True
