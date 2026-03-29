@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "meshcore tools — node database and live packet monitor"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = ["textual>=0.80", "msgpack>=1.0", "pycryptodome>=3.19"]
+dependencies = ["textual>=0.80", "msgpack>=1.0", "pycryptodome>=3.19", "pyserial"]
 
 [project.optional-dependencies]
 map = ["textual-image", "staticmap", "Pillow"]

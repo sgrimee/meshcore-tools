@@ -2,8 +2,15 @@
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
-from meshcore_tools.connection import ConnectionConfig, load_connection_config, save_connection_config
+from meshcore_tools.connection import (
+    ConnectionConfig,
+    format_ble_devices,
+    list_serial_ports,
+    load_connection_config,
+    save_connection_config,
+)
 
 
 def test_load_returns_none_when_missing(tmp_path):
@@ -59,9 +66,6 @@ def test_load_ignores_unknown_keys(tmp_path):
 
 
 # --- list_serial_ports tests ---
-
-from unittest.mock import MagicMock, patch
-from meshcore_tools.connection import list_serial_ports, format_ble_devices
 
 
 def test_list_serial_ports_empty():
