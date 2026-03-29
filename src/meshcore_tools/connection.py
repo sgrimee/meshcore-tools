@@ -84,6 +84,18 @@ def format_ble_devices(devices: list) -> list[tuple[str, str]]:
     return result
 
 
+def _ble_scan_error(exc: Exception) -> str:
+    """Plain-English error message for BLE scan failures."""
+    msg = str(exc)
+    if "InProgress" in msg:
+        return "Scan already in progress — wait a moment and try again."
+    if "NotPermitted" in msg or "NotAuthorized" in msg:
+        return f"Bluetooth permission denied.\nTry: sudo usermod -aG bluetooth $USER"
+    if "org.bluez.Error" in msg:
+        return msg.split("] ", 1)[-1] if "] " in msg else msg
+    return msg
+
+
 class ConnectScreen(ModalScreen[ConnectionConfig | None]):
     """Modal for configuring and initiating a companion connection."""
 
@@ -254,9 +266,7 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
             status.update(str(exc))
             scan_btn.display = True
         except Exception as exc:
-            status.update(
-                f"Bluetooth error: {exc}\nTry: sudo usermod -aG bluetooth $USER"
-            )
+            status.update(_ble_scan_error(exc))
             scan_btn.display = True
         finally:
             loading.display = False
