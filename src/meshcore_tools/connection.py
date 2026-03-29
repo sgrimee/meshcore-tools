@@ -17,7 +17,6 @@ import serial.tools.list_ports
 
 try:
     from bleak import BleakScanner
-    from bleak.exc import BleakDBusError, BleakError
     _BLEAK_AVAILABLE = True
 except ImportError:
     _BLEAK_AVAILABLE = False
