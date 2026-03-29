@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -82,6 +83,31 @@ def format_ble_devices(devices: list) -> list[tuple[str, str]]:
         if d.name and d.name.startswith("MeshCore"):
             result.append((f"{d.name}  {d.address}", d.address))
     return result
+
+
+async def _known_ble_devices() -> list[tuple[str, str]]:
+    """Return (display_label, address) for MeshCore devices known to BlueZ.
+
+    Queries `bluetoothctl devices` so paired/cached devices show up even when
+    they are not actively advertising.  Returns [] if bluetoothctl is absent.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "bluetoothctl", "devices",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await proc.communicate()
+        result = []
+        for line in stdout.decode().splitlines():
+            parts = line.strip().split(" ", 2)  # "Device AA:BB:CC name"
+            if len(parts) == 3 and parts[0] == "Device":
+                address, name = parts[1], parts[2]
+                if name.startswith("MeshCore"):
+                    result.append((f"{name}  {address}", address))
+        return result
+    except Exception:
+        return []
 
 
 def _ble_scan_error(exc: Exception) -> str:
@@ -254,6 +280,10 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
                 )
             devices = await BleakScanner.discover(timeout=5.0)
             options = format_ble_devices(devices)
+            # Merge in paired/cached devices from BlueZ that weren't advertising
+            known = await _known_ble_devices()
+            seen = {addr for _, addr in options}
+            options += [entry for entry in known if entry[1] not in seen]
             if options:
                 ble_sel.set_options(options)
                 ble_sel.value = options[0][1]
