@@ -96,7 +96,10 @@ def _ble_error_message(exc: Exception) -> str:
     """Return a plain-English error message for common BLE/connection failures."""
     msg = str(exc)
     if "NotPermitted" in msg:
-        return "BLE: another app is already connected to this device. Disconnect it first."
+        return (
+            "BLE: notification channel busy — stale connection could not be cleared. "
+            "Try: bluetoothctl disconnect <address>, or restart Bluetooth."
+        )
     if "NotFound" in msg or "DeviceNotFound" in msg:
         return "BLE device not found. Is it turned on and in range?"
     if "NotConnected" in msg:
@@ -105,6 +108,28 @@ def _ble_error_message(exc: Exception) -> str:
     if "org.bluez.Error" in msg:
         return f"BLE error: {msg.split('] ', 1)[-1]}" if '] ' in msg else f"BLE error: {msg}"
     return msg
+
+
+async def _ble_flush_stale(name: str) -> None:
+    """Connect to a BLE device by name fragment and disconnect immediately.
+
+    This forces BlueZ to close any abandoned connection left by a previous
+    failed attempt (ble_cx.py does not call disconnect() when start_notify
+    raises NotPermitted, leaving the BleakClient connected but unusable).
+    """
+    try:
+        from bleak import BleakScanner, BleakClient
+
+        def _match(d, _):
+            return bool(d.name and name in d.name)
+
+        device = await BleakScanner.find_device_by_filter(_match, timeout=5.0)
+        if device:
+            client = BleakClient(device)
+            await client.connect()
+            await client.disconnect()
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -151,9 +176,19 @@ class CompanionManager:
             elif config.type == "serial":
                 self._client = await MeshCore.create_serial(config.device or "")
             elif config.type == "ble":
-                self._client = await MeshCore.create_ble(
-                    config.ble_name or "", pin=config.ble_pin
-                )
+                try:
+                    self._client = await MeshCore.create_ble(
+                        config.ble_name or "", pin=config.ble_pin
+                    )
+                except Exception as exc:
+                    if "NotPermitted" not in str(exc):
+                        raise
+                    # Stale BleakClient left connected by previous failed attempt.
+                    # Flush it and retry once.
+                    await _ble_flush_stale(config.ble_name or "")
+                    self._client = await MeshCore.create_ble(
+                        config.ble_name or "", pin=config.ble_pin
+                    )
             else:
                 self._app.post_message(
                     CompanionConnectionError(reason=f"unknown type: {config.type}")

@@ -239,7 +239,7 @@ requires-dist = [
     { name = "msgpack", specifier = ">=1.0" },
     { name = "pillow", marker = "extra == 'map'" },
     { name = "pycryptodome", specifier = ">=3.19" },
-    { name = "pyserial" },
+    { name = "pyserial", specifier = ">=3.5" },
     { name = "staticmap", marker = "extra == 'map'" },
     { name = "textual", specifier = ">=0.80" },
     { name = "textual-image", marker = "extra == 'map'" },
