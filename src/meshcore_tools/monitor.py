@@ -922,9 +922,9 @@ class MonitorTab(TabPane):
         while not worker.is_cancelled:
             try:
                 packets = self._packet_provider.fetch_packets(self._region, limit=500)
-                self.call_from_thread(self._ingest_packets, packets)
+                self.app.call_from_thread(self._ingest_packets, packets)
             except Exception as e:
-                self.call_from_thread(self._set_status, str(e))
+                self.app.call_from_thread(self._set_status, str(e))
             for _ in range(self.poll_interval * 10):
                 if worker.is_cancelled:
                     return

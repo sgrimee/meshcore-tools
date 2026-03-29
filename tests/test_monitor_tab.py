@@ -29,3 +29,21 @@ def test_monitor_tab_accepts_poll_interval():
     tab = MonitorTab(region="EU", packet_provider=_make_provider(), poll_interval=10)
     assert tab._region == "EU"
     assert tab.poll_interval == 10
+
+
+def test_monitor_tab_poll_worker_uses_app_call_from_thread():
+    """_poll_worker must use self.app.call_from_thread, not self.call_from_thread.
+
+    TabPane (Widget) has no call_from_thread — that method lives on App.
+    This test catches the regression by verifying the source code directly.
+    """
+    import inspect
+    from meshcore_tools.monitor import MonitorTab
+    src = inspect.getsource(MonitorTab._poll_worker)
+    assert "self.app.call_from_thread" in src, (
+        "_poll_worker uses self.call_from_thread instead of self.app.call_from_thread; "
+        "TabPane does not have call_from_thread and will raise AttributeError at runtime."
+    )
+    assert "self.call_from_thread(" not in src.replace("self.app.call_from_thread(", ""), (
+        "_poll_worker has a bare self.call_from_thread() call — must be self.app.call_from_thread()."
+    )
