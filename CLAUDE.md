@@ -8,14 +8,19 @@ See README.md for usage, commands, input file format, and data sources.
 
 CLI entry point: `meshcore-tools` (defined in `[project.scripts]` in `pyproject.toml`).
 Package: `src/meshcore_tools/` with a `src/` layout. Tests in `tests/`.
-Dependency: `textual>=0.80` (TUI framework).
+Dependency: `textual>=0.80` (TUI framework). Optional: `meshcore>=2.3.3` (companion features, install via `pip install meshcore-tools[companion]`).
 
 **Module layout:**
-- `src/meshcore_tools/cli.py` — entry point, argparse subcommands (`nodes`, `monitor`)
-- `src/meshcore_tools/letsmesh_api.py` — letsmesh HTTP client (`fetch_nodes`, `fetch_packets`)
+- `src/meshcore_tools/cli.py` — entry point; no subcommand or `monitor` launches `MeshCoreApp`; `nodes` subcommands unchanged
+- `src/meshcore_tools/app.py` — `MeshCoreApp` (unified TUI with Monitor/Chat/Repeater tabs); `COMPANION_AVAILABLE` flag
+- `src/meshcore_tools/monitor.py` — `MonitorTab(TabPane)` + `PacketMonitorApp` (legacy) + `run_monitor()`
+- `src/meshcore_tools/chat.py` — `ChatTab(TabPane)` (channel strip, message log, 133-char input); only mounted when companion available
+- `src/meshcore_tools/repeaters.py` — `RepeatersTab(TabPane)` (repeater list + Status/Login/Cmd/Trace/Reboot); only mounted when companion available
+- `src/meshcore_tools/companion.py` — `CompanionManager` (async meshcore bridge) + 6 Textual message classes; `_MESHCORE_AVAILABLE` flag
+- `src/meshcore_tools/connection.py` — `ConnectionConfig` dataclass, `load/save_connection_config()`, `ConnectScreen` modal
 - `src/meshcore_tools/db.py` — node database (`load_db`, `save_db`, `parse_input_file`, `update`)
 - `src/meshcore_tools/nodes.py` — node query/display (`lookup`, `list_nodes`)
-- `src/meshcore_tools/monitor.py` — live Textual TUI (`PacketMonitorApp`, `run_monitor`)
+- `src/meshcore_tools/providers/` — `PacketProvider`, `NodeProvider`, `CoordProvider` protocols + implementations
 
 **Data flow:** `input/*.txt` + live API → `nodes.json` (gitignored)
 
