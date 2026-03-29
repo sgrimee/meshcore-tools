@@ -1,4 +1,4 @@
-"""Connection configuration and ConnectScreen modal."""
+"""Connection configuration: ConnectionConfig dataclass and config I/O."""
 
 from __future__ import annotations
 
