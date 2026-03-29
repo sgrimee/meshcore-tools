@@ -56,3 +56,69 @@ def test_load_ignores_unknown_keys(tmp_path):
     loaded = load_connection_config(config_dir=tmp_path)
     assert loaded is not None
     assert loaded.host == "1.2.3.4"
+
+
+# --- list_serial_ports tests ---
+
+from unittest.mock import MagicMock, patch
+from meshcore_tools.connection import list_serial_ports, format_ble_devices
+
+
+def test_list_serial_ports_empty():
+    with patch("meshcore_tools.connection.serial.tools.list_ports.comports", return_value=[]):
+        assert list_serial_ports() == []
+
+
+def test_list_serial_ports_sorted_and_formatted():
+    fake = [
+        ("/dev/ttyUSB1", "CP2102", "USB VID:PID"),
+        ("/dev/ttyUSB0", "FTDI", "USB VID:PID"),
+    ]
+    with patch("meshcore_tools.connection.serial.tools.list_ports.comports", return_value=fake):
+        result = list_serial_ports()
+    assert result == [
+        ("/dev/ttyUSB0 — FTDI", "/dev/ttyUSB0"),
+        ("/dev/ttyUSB1 — CP2102", "/dev/ttyUSB1"),
+    ]
+
+
+# --- format_ble_devices tests ---
+
+
+def _make_ble_device(name, address):
+    d = MagicMock()
+    d.name = name
+    d.address = address
+    return d
+
+
+def test_format_ble_devices_empty():
+    assert format_ble_devices([]) == []
+
+
+def test_format_ble_devices_filters_non_meshcore():
+    devices = [_make_ble_device("SomeOtherDevice", "AA:BB:CC:DD:EE:FF")]
+    assert format_ble_devices(devices) == []
+
+
+def test_format_ble_devices_includes_meshcore():
+    devices = [_make_ble_device("MeshCore-abc", "11:22:33:44:55:66")]
+    result = format_ble_devices(devices)
+    assert result == [("MeshCore-abc (11:22:33:44:55:66)", "MeshCore-abc")]
+
+
+def test_format_ble_devices_skips_none_name():
+    devices = [_make_ble_device(None, "11:22:33:44:55:66")]
+    assert format_ble_devices(devices) == []
+
+
+def test_format_ble_devices_multiple():
+    devices = [
+        _make_ble_device("MeshCore-1", "AA:AA:AA:AA:AA:AA"),
+        _make_ble_device("Unrelated", "BB:BB:BB:BB:BB:BB"),
+        _make_ble_device("MeshCore-2", "CC:CC:CC:CC:CC:CC"),
+    ]
+    result = format_ble_devices(devices)
+    assert len(result) == 2
+    assert result[0] == ("MeshCore-1 (AA:AA:AA:AA:AA:AA)", "MeshCore-1")
+    assert result[1] == ("MeshCore-2 (CC:CC:CC:CC:CC:CC)", "MeshCore-2")

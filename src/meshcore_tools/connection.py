@@ -12,6 +12,15 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Select, Static
 from textual.containers import Container
 
+import serial.tools.list_ports
+
+try:
+    from bleak import BleakScanner
+    from bleak.exc import BleakDBusError, BleakError
+    _BLEAK_AVAILABLE = True
+except ImportError:
+    _BLEAK_AVAILABLE = False
+
 
 _DEFAULT_CONFIG_DIR = Path.home() / ".config" / "meshcore-tools"
 
@@ -50,6 +59,21 @@ def save_connection_config(
     path = config_dir / "connection.json"
     data = {k: v for k, v in asdict(config).items() if v is not None}
     path.write_text(json.dumps(data, indent=2))
+
+
+def list_serial_ports() -> list[tuple[str, str]]:
+    """Return (display_label, port_path) pairs for available serial ports, sorted by port."""
+    ports = serial.tools.list_ports.comports()
+    return [(f"{port} — {desc}", port) for port, desc, _ in sorted(ports)]
+
+
+def format_ble_devices(devices: list) -> list[tuple[str, str]]:
+    """Return (display_label, device_name) pairs for MeshCore BLE devices."""
+    result = []
+    for d in devices:
+        if d.name and d.name.startswith("MeshCore"):
+            result.append((f"{d.name} ({d.address})", d.name))
+    return result
 
 
 class ConnectScreen(ModalScreen[ConnectionConfig | None]):
