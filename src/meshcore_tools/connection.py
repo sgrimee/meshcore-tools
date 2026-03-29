@@ -159,7 +159,6 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
                         value=self._current.ble_pin or "",
                         placeholder="leave blank if not required",
                         id="ble_pin",
-                        password=True,
                     )
             with Container(id="buttons"):
                 yield Button("Connect", variant="primary", id="btn_connect")
