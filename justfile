@@ -31,6 +31,10 @@ list:
 lookup prefix:
     uv run lma nodes lookup {{ prefix }}
 
+# Clear the OSM tile cache
+clear-tile-cache:
+    rm -rf ~/.cache/lma/tiles
+
 # Start live packet monitor TUI
 monitor region="LUX" poll="5":
     uv run lma monitor --region {{ region }} --poll {{ poll }}
