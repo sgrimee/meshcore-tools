@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+from rich.markup import escape as markup_escape
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -132,11 +133,14 @@ class ChatTab(TabPane):
         msgs = self._messages.get(self._active_channel_idx, [])
         lines: list[str] = []
         for m in msgs:
-            ts = datetime.fromtimestamp(m["ts"], tz=timezone.utc).astimezone().strftime("%H:%M")
-            sender = m["sender"]
-            text = m["text"]
+            try:
+                ts = datetime.fromtimestamp(m["ts"], tz=timezone.utc).astimezone().strftime("%H:%M")
+            except (ValueError, OSError, TypeError):
+                ts = "??:??"
+            sender = markup_escape(m["sender"])
+            text = markup_escape(m["text"])
             status = m.get("status", "")
-            if sender == "you":
+            if m["sender"] == "you":
                 lines.append(f"[dim]{ts}[/dim]  [bold]you:[/bold]  {text}  {status}")
             else:
                 lines.append(f"[dim]{ts}[/dim]  {sender}:  {text}")
