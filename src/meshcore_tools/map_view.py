@@ -28,6 +28,10 @@ try:
     from textual_image.widget import Image as TileImage
     _HAS_MAP_LIBS = True
 except ImportError:
+    StaticMap = None  # type: ignore
+    CircleMarker = None  # type: ignore
+    Line = None  # type: ignore
+    TileImage = None  # type: ignore
     _HAS_MAP_LIBS = False
 
 _TILE_CACHE = Path.home() / ".cache" / "lma" / "tiles"
@@ -155,19 +159,22 @@ def collect_map_nodes(
     return placed, unplaced, path_coords
 
 
-class _CachedStaticMap(StaticMap):
-    """StaticMap that caches downloaded tiles to ~/.cache/meshcore_tools/tiles/."""
+if _HAS_MAP_LIBS:
+    class _CachedStaticMap(StaticMap):
+        """StaticMap that caches downloaded tiles to ~/.cache/meshcore_tools/tiles/."""
 
-    def get(self, url, **kwargs):
-        _TILE_CACHE.mkdir(parents=True, exist_ok=True)
-        key = hashlib.sha1(url.encode()).hexdigest()
-        path = _TILE_CACHE / key
-        if path.exists():
-            return 200, path.read_bytes()
-        status, content = super().get(url, **kwargs)
-        if status == 200:
-            path.write_bytes(content)
-        return status, content
+        def get(self, url, **kwargs):
+            _TILE_CACHE.mkdir(parents=True, exist_ok=True)
+            key = hashlib.sha1(url.encode()).hexdigest()
+            path = _TILE_CACHE / key
+            if path.exists():
+                return 200, path.read_bytes()
+            status, content = super().get(url, **kwargs)
+            if status == 200:
+                path.write_bytes(content)
+            return status, content
+else:
+    _CachedStaticMap = None  # type: ignore
 
 
 def _boxes_overlap(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
