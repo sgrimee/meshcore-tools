@@ -23,10 +23,11 @@ try:
         CompanionConnectionError,
         CompanionDisconnected,
         ContactsUpdated,
+        _MESHCORE_AVAILABLE as _meshcore_pkg_available,
     )
     from meshcore_tools.chat import ChatTab
     from meshcore_tools.repeaters import RepeatersTab
-    COMPANION_AVAILABLE = True
+    COMPANION_AVAILABLE = _meshcore_pkg_available
 except ImportError:
     COMPANION_AVAILABLE = False
 
