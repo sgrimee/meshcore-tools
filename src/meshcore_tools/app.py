@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import Footer, Header, TabbedContent
+
+if TYPE_CHECKING:
+    from meshcore_tools.providers import PacketProvider
 
 from meshcore_tools.monitor import MonitorTab
 from meshcore_tools.connection import (
@@ -30,11 +35,6 @@ try:
     COMPANION_AVAILABLE = _meshcore_pkg_available
 except ImportError:
     COMPANION_AVAILABLE = False
-
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from meshcore_tools.providers import PacketProvider
 
 
 class MeshCoreApp(App):
