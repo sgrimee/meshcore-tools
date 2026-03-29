@@ -20,6 +20,7 @@ try:
     _MESHCORE_AVAILABLE = True
 except ImportError:
     _MESHCORE_AVAILABLE = False
+    _EventType = None  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------
@@ -264,7 +265,7 @@ class CompanionManager:
             return "not connected"
         try:
             result = await self._client.commands.send_trace(
-                auth_code=0, tag=None, flags=None, path=None
+                dst=contact, auth_code=0, tag=None, flags=None, path=None
             )
             return str(result.payload)
         except Exception as exc:
