@@ -880,7 +880,7 @@ class MonitorTab(TabPane):
         channels_path: str | None = None,
     ) -> None:
         super().__init__("Monitor", id="tab_monitor")
-        self.region = region
+        self._region = region
         self.poll_interval = poll_interval
         self._packet_provider = packet_provider
         channels = load_channels(channels_path) if channels_path else []
@@ -921,7 +921,7 @@ class MonitorTab(TabPane):
         worker = get_current_worker()
         while not worker.is_cancelled:
             try:
-                packets = self._packet_provider.fetch_packets(self.region, limit=500)
+                packets = self._packet_provider.fetch_packets(self._region, limit=500)
                 self.call_from_thread(self._ingest_packets, packets)
             except Exception as e:
                 self.call_from_thread(self._set_status, str(e))
@@ -931,7 +931,7 @@ class MonitorTab(TabPane):
                 time.sleep(0.1)
 
     def _ingest_packets(self, packets: list[dict]) -> None:
-        region = self.region.upper()
+        region = self._region.upper()
         new = [
             p for p in packets
             if p.get("id") not in self._seen_ids
