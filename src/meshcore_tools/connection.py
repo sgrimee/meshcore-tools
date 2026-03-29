@@ -270,15 +270,15 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
                 port=port,
             )
         elif conn_type == "serial":
-            config = ConnectionConfig(
-                type="serial",
-                device=str(self.query_one("#serial-select", Select).value),
-            )
+            val = self.query_one("#serial-select", Select).value
+            if val is Select.NULL:
+                return
+            config = ConnectionConfig(type="serial", device=str(val))
         elif conn_type == "ble":
-            config = ConnectionConfig(
-                type="ble",
-                ble_name=str(self.query_one("#ble-select", Select).value),
-            )
+            val = self.query_one("#ble-select", Select).value
+            if val is Select.NULL:
+                return
+            config = ConnectionConfig(type="ble", ble_name=str(val))
         else:
             return
         self.dismiss(config)
