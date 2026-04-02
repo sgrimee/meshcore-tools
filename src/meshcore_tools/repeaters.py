@@ -182,6 +182,8 @@ class RepeatersTab(TabPane):
         self, event: "TabbedContent.TabActivated"
     ) -> None:
         self._tab_active = event.pane is self
+        if self._tab_active:
+            self._active_cmd_idx = 0
         self._highlight_active_cmd()
 
     def action_prev_cmd(self) -> None:
