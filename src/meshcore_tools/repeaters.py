@@ -111,7 +111,7 @@ class RepeatersTab(TabPane):
     """
 
     def __init__(self) -> None:
-        super().__init__("Repeaters", id="tab_repeaters")
+        super().__init__("F3 Repeaters", id="tab_repeaters")
         self._repeaters: list[dict] = []
         self._selected_idx: int | None = None
         self._log_lines: list[str] = []

@@ -45,7 +45,7 @@ class MeshCoreApp(App):
     TITLE = "MeshCore Tools"
 
     BINDINGS = [
-        Binding("f1", "switch_tab('tab_monitor')", "Monitor"),
+        Binding("f1", "switch_tab('tab_monitor')", "Monitor", show=False),
         Binding("f2", "switch_tab('tab_chat')", "Chat", show=False),
         Binding("f3", "switch_tab('tab_repeaters')", "Repeaters", show=False),
         Binding("l", "toggle_log_panel", "Log Panel"),

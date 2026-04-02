@@ -879,7 +879,7 @@ class MonitorTab(TabPane):
         poll_interval: int = 5,
         channels_path: str | None = None,
     ) -> None:
-        super().__init__("Monitor", id="tab_monitor")
+        super().__init__("F1 Monitor", id="tab_monitor")
         self._region = region
         self.poll_interval = poll_interval
         self._packet_provider = packet_provider

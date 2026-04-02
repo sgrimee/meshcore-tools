@@ -73,7 +73,7 @@ class ChatTab(TabPane):
     """
 
     def __init__(self) -> None:
-        super().__init__("Chat", id="tab_chat")
+        super().__init__("F2 Chat", id="tab_chat")
         self._channels: list[dict] = []
         self._active_channel_idx: int = 0
         self._messages: dict[int, list[dict]] = {}
