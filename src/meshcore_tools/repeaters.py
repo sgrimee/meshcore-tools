@@ -257,9 +257,10 @@ class RepeatersTab(TabPane):
             return None
         return self._repeaters[self._selected_idx]
 
-    def _log(self, line: str) -> None:
+    def _log(self, line: str, style: str = "") -> None:
         ts = datetime.now(timezone.utc).astimezone().strftime("%H:%M")
-        self._log_lines.append(f"[dim]{ts}[/dim]  {line}")
+        entry = f"[dim]{ts}[/dim]  {f'[{style}]{line}[/{style}]' if style else line}"
+        self._log_lines.append(entry)
         self.query_one("#output_content", Static).update("\n".join(self._log_lines))
         self.query_one("#output_log", VerticalScroll).scroll_end(animate=False)
 
@@ -272,7 +273,7 @@ class RepeatersTab(TabPane):
             return
         contact = self._selected_contact()
         if contact is None:
-            self._log("[red]No contact selected[/red]")
+            self._log("No contact selected", "red")
             return
         if text.startswith("/"):
             self._do_cmd(contact, text[1:].strip())
@@ -282,7 +283,7 @@ class RepeatersTab(TabPane):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         contact = self._selected_contact()
         if contact is None:
-            self._log("[red]No contact selected[/red]")
+            self._log("No contact selected", "red")
             return
         if event.button.id == "btn_ping":
             self._run_ping(contact)
@@ -297,53 +298,66 @@ class RepeatersTab(TabPane):
         elif event.button.id == "btn_reboot":
             self._run_reboot(contact)
 
+    def _contact_name(self, contact: dict) -> str:
+        return markup_escape(contact.get("adv_name") or contact.get("name", "?"))
+
     @work(thread=False, exclusive=False)
     async def _do_dm(self, contact: dict, msg: str) -> None:
         manager: CompanionManager | None = getattr(self.app, "companion", None)
         if not manager:
-            self._log("[red]Companion not connected[/red]")
+            self._log("Companion not connected", "red")
             return
-        self._log(f"→ {markup_escape(contact.get('adv_name') or contact.get('name', '?'))}: {markup_escape(msg)}")
+        self._log(f"→ {self._contact_name(contact)}: {markup_escape(msg)}", "cyan")
         result = await manager.send_contact_msg(contact, msg)
-        self._log(f"DM: {markup_escape(result)}")
+        if result.startswith("error"):
+            self._log(f"DM: {markup_escape(result)}", "red")
+        else:
+            self._log(f"DM: {markup_escape(result)}", "green")
 
     @work(thread=False, exclusive=False)
     async def _run_ping(self, contact: dict) -> None:
         manager: CompanionManager | None = getattr(self.app, "companion", None)
         if not manager:
-            self._log("[red]Companion not connected[/red]")
+            self._log("Companion not connected", "red")
             return
-        self._log(f"ping → {markup_escape(contact.get('adv_name') or contact.get('name', '?'))} …")
+        self._log(f"ping → {self._contact_name(contact)} …", "dim")
         result = await manager.send_contact_ping(contact)
-        self._log(f"ping: {markup_escape(result)}")
+        if result in ("timeout", "not connected") or result.startswith("error"):
+            self._log(f"ping: {markup_escape(result)}", "red")
+        else:
+            self._log(f"ping: {markup_escape(result)}", "yellow")
 
     @work(thread=False, exclusive=False)
     async def _run_telemetry(self, contact: dict) -> None:
         manager: CompanionManager | None = getattr(self.app, "companion", None)
         if not manager:
-            self._log("[red]Companion not connected[/red]")
+            self._log("Companion not connected", "red")
             return
-        self._log(f"telemetry → {markup_escape(contact.get('adv_name') or contact.get('name', '?'))} …")
+        self._log(f"telemetry → {self._contact_name(contact)} …", "dim")
         result = await manager.send_contact_telemetry(contact)
-        self._log(f"telemetry: {markup_escape(result)}")
+        if result in ("timeout", "not connected") or result.startswith("error"):
+            self._log(f"telemetry: {markup_escape(result)}", "red")
+        else:
+            self._log(f"telemetry: {markup_escape(result)}", "yellow")
 
     def receive_contact_message(
         self, pubkey_prefix: str, sender: str, text: str, timestamp: int
     ) -> None:
         """Show an incoming DM in the output log (called by MeshCoreApp)."""
-        sender = markup_escape(sender)
-        text = markup_escape(text)
-        self._log(f"[bold]{sender}:[/bold] {text}")
+        self._log(f"[bold]{markup_escape(sender)}:[/bold] {markup_escape(text)}", "green")
 
     @work(thread=False, exclusive=False)
     async def _run_status(self, contact: dict) -> None:
         manager: CompanionManager | None = getattr(self.app, "companion", None)
         if not manager:
-            self._log("[red]Companion not connected[/red]")
+            self._log("Companion not connected", "red")
             return
-        self._log(f"status → {markup_escape(contact.get('adv_name') or contact.get('name', '?'))} …")
+        self._log(f"status → {self._contact_name(contact)} …", "dim")
         result = await manager.send_repeater_status(contact)
-        self._log(f"status: {markup_escape(result)}")
+        if result in ("timeout", "not connected") or result.startswith("error"):
+            self._log(f"status: {markup_escape(result)}", "red")
+        else:
+            self._log(f"status: {markup_escape(result)}", "yellow")
 
     def _run_login(self, contact: dict, pwd: str | None) -> None:
         if not pwd:
@@ -354,31 +368,40 @@ class RepeatersTab(TabPane):
     async def _do_login(self, contact: dict, pwd: str) -> None:
         manager: CompanionManager | None = getattr(self.app, "companion", None)
         if not manager:
-            self._log("[red]Companion not connected[/red]")
+            self._log("Companion not connected", "red")
             return
-        self._log(f"login → {markup_escape(contact.get('adv_name') or contact.get('name', '?'))} …")
+        self._log(f"login → {self._contact_name(contact)} …", "dim")
         result = await manager.send_repeater_login(contact, pwd)
-        self._log(f"login: {markup_escape(result)}")
+        if result.startswith("error"):
+            self._log(f"login: {markup_escape(result)}", "red")
+        else:
+            self._log(f"login: {markup_escape(result)}", "yellow")
 
     @work(thread=False, exclusive=False)
     async def _do_cmd(self, contact: dict, cmd: str) -> None:
         manager: CompanionManager | None = getattr(self.app, "companion", None)
         if not manager:
-            self._log("[red]Companion not connected[/red]")
+            self._log("Companion not connected", "red")
             return
-        self._log(f"cmd {markup_escape(cmd)!r} → {markup_escape(contact.get('adv_name') or contact.get('name', '?'))} …")
-        result = await manager.send_repeater_cmd(contact, cmd)
-        self._log(f"result: {markup_escape(result)}")
+        self._log(f"/{markup_escape(cmd)} → {self._contact_name(contact)} …", "cyan")
+        result = await manager.send_contact_cmd(contact, cmd)
+        if result.startswith("error"):
+            self._log(f"cmd: {markup_escape(result)}", "red")
+        else:
+            self._log(f"cmd: {markup_escape(result)}", "green")
 
     @work(thread=False, exclusive=False)
     async def _run_trace(self, contact: dict) -> None:
         manager: CompanionManager | None = getattr(self.app, "companion", None)
         if not manager:
-            self._log("[red]Companion not connected[/red]")
+            self._log("Companion not connected", "red")
             return
-        self._log(f"trace → {markup_escape(contact.get('adv_name') or contact.get('name', '?'))} …")
+        self._log(f"trace → {self._contact_name(contact)} …", "dim")
         result = await manager.send_repeater_trace(contact)
-        self._log(f"trace: {markup_escape(result)}")
+        if result in ("timeout", "not connected") or result.startswith("error"):
+            self._log(f"trace: {markup_escape(result)}", "red")
+        else:
+            self._log(f"trace: {markup_escape(result)}", "yellow")
 
     def _run_reboot(self, contact: dict) -> None:
         from textual.app import ComposeResult as _CR
@@ -389,7 +412,7 @@ class RepeatersTab(TabPane):
             def compose(self) -> _CR:
                 with Container():
                     yield Static(
-                        f"[bold]Reboot {markup_escape(contact.get('adv_name') or contact.get('name', '?'))}?[/bold]",
+                        f"[bold]Reboot {markup_escape(contact.get('adv_name') or contact.get('name', '?'))}?[/bold]",  # noqa: E501
                         markup=True,
                     )
                     with Horizontal():
@@ -415,9 +438,12 @@ class RepeatersTab(TabPane):
         if not manager:
             self._log("[red]Companion not connected[/red]")
             return
-        self._log(f"reboot → {markup_escape(contact.get('adv_name') or contact.get('name', '?'))} …")
+        self._log(f"reboot → {self._contact_name(contact)} …", "dim")
         result = await manager.send_repeater_reboot(contact)
-        self._log(f"reboot: {markup_escape(result)}")
+        if result.startswith("error"):
+            self._log(f"reboot: {markup_escape(result)}", "red")
+        else:
+            self._log(f"reboot: {markup_escape(result)}", "yellow")
 
     def clear(self) -> None:
         """Clear log and contact list (called on disconnect)."""

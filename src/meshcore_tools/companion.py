@@ -351,13 +351,10 @@ class CompanionManager:
         if not self._client or not self._connected:
             return "not connected"
         try:
-            result = await self._client.commands.send_statusreq(dst=contact)
-            if str(getattr(result, "type", "")) == str(_EventType.ERROR):
-                return f"error: {result.payload}"
-            response = await self._client.wait_for_event(_EventType.STATUS_RESPONSE, timeout=10)
-            if response is None:
+            result = await self._client.commands.req_status_sync(contact)
+            if result is None:
                 return "timeout"
-            return str(response.payload)
+            return str(result)
         except Exception as exc:
             return f"error: {exc}"
 
@@ -371,13 +368,15 @@ class CompanionManager:
         except Exception as exc:
             return f"error: {exc}"
 
-    async def send_repeater_cmd(self, contact: dict, cmd: str) -> str:
-        """Send an arbitrary command to a repeater."""
+    async def send_contact_cmd(self, contact: dict, cmd: str) -> str:
+        """Send a command to any contact. Returns 'sent' on success; response arrives as a contact message."""
         if not self._client or not self._connected:
             return "not connected"
         try:
             result = await self._client.commands.send_cmd(dst=contact, cmd=cmd)
-            return str(result.payload)
+            if str(getattr(result, "type", "")) == str(_EventType.ERROR):
+                return f"error: {result.payload}"
+            return "sent"
         except Exception as exc:
             return f"error: {exc}"
 
@@ -387,9 +386,11 @@ class CompanionManager:
             return "not connected"
         try:
             result = await self._client.commands.send_trace(
-                dst=contact, auth_code=0, tag=None, flags=None, path=None
+                auth_code=0, tag=None, flags=None, path=None
             )
-            return str(result.payload)
+            if str(getattr(result, "type", "")) == str(_EventType.ERROR):
+                return f"error: {result.payload}"
+            return "sent"
         except Exception as exc:
             return f"error: {exc}"
 
@@ -399,7 +400,9 @@ class CompanionManager:
             return "not connected"
         try:
             result = await self._client.commands.send_cmd(dst=contact, cmd="reboot")
-            return str(result.payload)
+            if str(getattr(result, "type", "")) == str(_EventType.ERROR):
+                return f"error: {result.payload}"
+            return "sent"
         except Exception as exc:
             return f"error: {exc}"
 
@@ -417,17 +420,33 @@ class CompanionManager:
 
     async def send_contact_ping(self, contact: dict) -> str:
         """Send a path-discovery ping to a contact. Returns path info or timeout."""
+        import asyncio as _asyncio
         if not self._client or not self._connected:
             return "not connected"
         try:
-            result = await self._client.commands.send_path_discovery(dst=contact)
-            if str(getattr(result, "type", "")) == str(_EventType.ERROR):
-                return f"error: {result.payload}"
-            timeout = result.payload.get("suggested_timeout", 6000) / 600
-            response = await self._client.wait_for_event(_EventType.PATH_RESPONSE, timeout=timeout)
-            if response is None:
-                return "timeout"
-            return str(response.payload)
+            # Pre-subscribe BEFORE sending to avoid missing a fast response
+            loop = _asyncio.get_event_loop()
+            response_future: _asyncio.Future = loop.create_future()
+
+            def _on_path(event: Any) -> None:
+                if not response_future.done():
+                    response_future.set_result(event)
+
+            sub = self._client.dispatcher.subscribe(_EventType.PATH_RESPONSE, _on_path)
+            try:
+                result = await self._client.commands.send_path_discovery(dst=contact)
+                if str(getattr(result, "type", "")) == str(_EventType.ERROR):
+                    return f"error: {result.payload}"
+                timeout = result.payload.get("suggested_timeout", 6000) / 600
+                try:
+                    response = await _asyncio.wait_for(
+                        _asyncio.shield(response_future), timeout=timeout
+                    )
+                    return str(response.payload)
+                except _asyncio.TimeoutError:
+                    return "timeout"
+            finally:
+                sub.unsubscribe()
         except Exception as exc:
             return f"error: {exc}"
 
@@ -436,12 +455,9 @@ class CompanionManager:
         if not self._client or not self._connected:
             return "not connected"
         try:
-            result = await self._client.commands.send_telemetry_req(dst=contact)
-            if str(getattr(result, "type", "")) == str(_EventType.ERROR):
-                return f"error: {result.payload}"
-            response = await self._client.wait_for_event(_EventType.TELEMETRY_RESPONSE, timeout=10)
-            if response is None:
+            result = await self._client.commands.req_telemetry_sync(contact)
+            if result is None:
                 return "timeout"
-            return str(response.payload)
+            return str(result)
         except Exception as exc:
             return f"error: {exc}"
