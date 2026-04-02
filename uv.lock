@@ -207,7 +207,6 @@ wheels = [
 
 [[package]]
 name = "meshcore-tools"
-version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "msgpack" },
@@ -244,7 +243,7 @@ requires-dist = [
     { name = "textual", specifier = ">=0.80" },
     { name = "textual-image", marker = "extra == 'map'" },
 ]
-provides-extras = ["map", "companion"]
+provides-extras = ["companion", "map"]
 
 [package.metadata.requires-dev]
 dev = [
