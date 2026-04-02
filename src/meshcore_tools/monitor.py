@@ -550,6 +550,7 @@ class PacketMonitorApp(App):
                     target_getter=lambda: self.query_one("#detail_side"),
                     min_size=4,
                     max_size=200,
+                    reversed=True,
                     id="inner_resize",
                 )
                 yield MapSidePanel(id="map_side")
@@ -977,6 +978,7 @@ class MonitorTab(TabPane):
                     target_getter=lambda: self.query_one("#detail_side"),
                     min_size=4,
                     max_size=200,
+                    reversed=True,
                     id="inner_resize",
                 )
                 yield MapSidePanel(id="map_side")

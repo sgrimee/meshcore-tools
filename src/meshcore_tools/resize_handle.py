@@ -36,12 +36,14 @@ class ResizeHandle(Widget):
         target_getter: Callable[[], Widget],
         min_size: int = 4,
         max_size: int = 120,
+        reversed: bool = False,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self._target_getter = target_getter
         self._min_size = min_size
         self._max_size = max_size
+        self._reversed = reversed
         self._dragging = False
         self._vertical = False
         self._start_pos = 0
@@ -69,11 +71,11 @@ class ResizeHandle(Widget):
             return
         target = self._target_getter()
         if self._vertical:
-            delta = self._start_pos - event.screen_x
+            delta = event.screen_x - self._start_pos if self._reversed else self._start_pos - event.screen_x
             new_size = max(self._min_size, min(self._max_size, self._start_size + delta))
             target.styles.width = new_size
         else:
-            delta = self._start_pos - event.screen_y
+            delta = event.screen_y - self._start_pos if self._reversed else self._start_pos - event.screen_y
             new_size = max(self._min_size, min(self._max_size, self._start_size + delta))
             target.styles.height = new_size
         event.stop()
