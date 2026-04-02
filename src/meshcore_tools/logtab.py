@@ -10,7 +10,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.message import Message
-from textual.widgets import Label, RichLog, Select, TabPane
+from textual.widgets import Label, RichLog, Select
 from textual.widget import Widget
 
 
@@ -126,16 +126,6 @@ class LogView(Widget):
         log_output.write(
             f"[dim]{ts}[/] [{color}]{record.levelname:<8}[/] [dim]{name}[/] {msg}"
         )
-
-
-class LogTab(TabPane):
-    """Live log viewer tab — wraps LogView inside a TabbedContent tab."""
-
-    def __init__(self) -> None:
-        super().__init__("Logs", id="tab_logs")
-
-    def compose(self) -> ComposeResult:
-        yield LogView()
 
 
 class LogPanel(Widget):
