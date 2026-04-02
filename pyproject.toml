@@ -23,6 +23,15 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/meshcore_tools"]
 
+[tool.hatch.build.targets.sdist]
+exclude = [
+    ".claude/",
+    ".github/",
+    ".githooks/",
+    "CLAUDE.md",
+    "justfile",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
