@@ -10,7 +10,7 @@ from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, VerticalScroll
-from textual.widgets import Button, Input, Label, Static, TabPane
+from textual.widgets import Input, Label, ListItem, ListView, Static, TabPane
 
 if TYPE_CHECKING:
     from meshcore_tools.companion import CompanionManager
@@ -18,18 +18,8 @@ if TYPE_CHECKING:
 _MAX_MSG_LEN = 133
 
 
-class _ChannelButton(Button):
-    """A tab-strip button representing one channel."""
-
-    can_focus = False  # Tab should not stop on individual channel buttons
-
-    def __init__(self, label: str, channel_idx: int) -> None:
-        super().__init__(label, id=f"chan_{channel_idx}")
-        self.channel_idx = channel_idx
-
-
 class ChatTab(TabPane):
-    """Chat tab: channel strip + message log + input bar."""
+    """Chat tab: channel list on the left + message log + input bar on the right."""
 
     BINDINGS = [
         Binding("enter", "send_message", "Send", show=False),
@@ -40,20 +30,17 @@ class ChatTab(TabPane):
     DEFAULT_CSS = """
     ChatTab {
         height: 1fr;
-        layout: vertical;
-    }
-    ChatTab #channel_strip {
-        height: 3;
         layout: horizontal;
-        background: $panel;
-        padding: 0 1;
     }
-    ChatTab #channel_strip Button {
-        margin-right: 1;
-        min-width: 12;
+    ChatTab #channel_list {
+        width: 20;
+        height: 1fr;
+        border-right: solid $accent;
     }
-    ChatTab #channel_strip Button.-active-channel {
-        border: solid $accent;
+    ChatTab #right_pane {
+        width: 1fr;
+        height: 1fr;
+        layout: vertical;
     }
     ChatTab #msg_log {
         height: 1fr;
@@ -83,17 +70,17 @@ class ChatTab(TabPane):
         self._messages: dict[int, list[dict]] = {}
 
     def compose(self) -> ComposeResult:
-        with Container(id="channel_strip"):
-            yield Static("No channels", id="no_channels_hint")
-        with VerticalScroll(id="msg_log"):
-            yield Static("", id="msg_content", markup=True)
-        with Container(id="input_bar"):
-            yield Input(
-                placeholder="type a message…",
-                id="msg_input",
-                max_length=_MAX_MSG_LEN,
-            )
-            yield Label(f"0/{_MAX_MSG_LEN}", id="char_count")
+        yield ListView(id="channel_list")
+        with Container(id="right_pane"):
+            with VerticalScroll(id="msg_log"):
+                yield Static("", id="msg_content", markup=True)
+            with Container(id="input_bar"):
+                yield Input(
+                    placeholder="type a message…",
+                    id="msg_input",
+                    max_length=_MAX_MSG_LEN,
+                )
+                yield Label(f"0/{_MAX_MSG_LEN}", id="char_count")
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "msg_input":
@@ -154,26 +141,28 @@ class ChatTab(TabPane):
     def populate_channels(self, channels: list[dict]) -> None:
         """Called by MeshCoreApp after channels are fetched from the device."""
         self._channels = channels
-        strip = self.query_one("#channel_strip", Container)
-        strip.remove_children()
-        if not channels:
-            strip.mount(Static("No channels", id="no_channels_hint"))
-            return
+        list_view = self.query_one("#channel_list", ListView)
+        list_view.clear()
         for ch in self._channels:
-            btn = _ChannelButton(ch["name"], ch["idx"])
-            if ch["idx"] == self._active_channel_idx:
-                btn.add_class("-active-channel")
-            strip.mount(btn)
+            list_view.append(ListItem(Label(ch["name"])))
+        if channels:
+            self._active_channel_idx = channels[0]["idx"]
+            self._refresh_log()
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if not isinstance(event.button, _ChannelButton):
+    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+        if event.list_view.id != "channel_list":
             return
-        self._select_channel(event.button.channel_idx)
+        idx = event.list_view.index
+        if idx is not None and idx < len(self._channels):
+            self._active_channel_idx = self._channels[idx]["idx"]
+            self._refresh_log()
 
     def _select_channel(self, channel_idx: int) -> None:
         self._active_channel_idx = channel_idx
-        for btn in self.query(_ChannelButton):
-            btn.set_class(btn.channel_idx == channel_idx, "-active-channel")
+        idxs = [ch["idx"] for ch in self._channels]
+        if channel_idx in idxs:
+            list_view = self.query_one("#channel_list", ListView)
+            list_view.index = idxs.index(channel_idx)
         self._refresh_log()
 
     def action_prev_channel(self) -> None:
