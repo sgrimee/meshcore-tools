@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Callable
 
 from textual.events import MouseDown, MouseMove, MouseUp
+from textual.renderables.blank import Blank
 from textual.widget import Widget
 
 if TYPE_CHECKING:
@@ -45,6 +46,9 @@ class ResizeHandle(Widget):
         self._vertical = False
         self._start_pos = 0
         self._start_size = 0
+
+    def render(self) -> Blank:
+        return Blank()
 
     def on_mouse_down(self, event: MouseDown) -> None:
         target = self._target_getter()
