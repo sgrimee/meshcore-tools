@@ -23,10 +23,10 @@ _TYPE_BADGE: dict[int, str] = {0: "???", 1: "CLI", 2: "REP", 3: "RMS", 4: "SNS"}
 # Which command buttons are shown for each contact type
 _TYPE_CMDS: dict[int, list[str]] = {
     0: [],                                                              # Unknown
-    1: ["btn_dm", "btn_ping", "btn_telemetry"],                        # ChatNode
-    2: ["btn_dm", "btn_ping", "btn_status", "btn_telemetry", "btn_login", "btn_cmd", "btn_trace", "btn_reboot"],  # Repeater
-    3: ["btn_status", "btn_login", "btn_cmd", "btn_ping"],             # RoomServer
-    4: ["btn_status", "btn_ping", "btn_telemetry"],                    # Sensor
+    1: ["btn_ping", "btn_telemetry"],                                   # ChatNode
+    2: ["btn_ping", "btn_status", "btn_telemetry", "btn_login", "btn_trace", "btn_reboot"],  # Repeater
+    3: ["btn_status", "btn_login", "btn_ping"],                         # RoomServer
+    4: ["btn_status", "btn_ping", "btn_telemetry"],                     # Sensor
 }
 
 
@@ -60,67 +60,7 @@ class _PasswordScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
-class _CmdScreen(ModalScreen[str | None]):
-    """Modal prompt for free-text repeater command."""
-
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
-
-    def compose(self) -> ComposeResult:
-        with Container():
-            yield Static("[bold]Send command[/bold]", markup=True)
-            yield Label("Command:")
-            yield Input(placeholder="e.g. uptime", id="cmd")
-            with Horizontal():
-                yield Button("Send", variant="primary", id="btn_ok")
-                yield Button("Cancel", id="btn_cancel")
-
-    def on_mount(self) -> None:
-        self.query_one("#cmd", Input).focus()
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn_cancel":
-            self.dismiss(None)
-        elif event.button.id == "btn_ok":
-            self.dismiss(self.query_one("#cmd", Input).value)
-
-    def on_input_submitted(self, _: Input.Submitted) -> None:
-        self.dismiss(self.query_one("#cmd", Input).value)
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-
-class _DMScreen(ModalScreen[str | None]):
-    """Modal prompt for a direct message."""
-
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
-
-    def compose(self) -> ComposeResult:
-        with Container():
-            yield Static("[bold]Direct message[/bold]", markup=True)
-            yield Label("Message:")
-            yield Input(placeholder="message…", id="dm")
-            with Horizontal():
-                yield Button("Send", variant="primary", id="btn_ok")
-                yield Button("Cancel", id="btn_cancel")
-
-    def on_mount(self) -> None:
-        self.query_one("#dm", Input).focus()
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn_cancel":
-            self.dismiss(None)
-        elif event.button.id == "btn_ok":
-            self.dismiss(self.query_one("#dm", Input).value)
-
-    def on_input_submitted(self, _: Input.Submitted) -> None:
-        self.dismiss(self.query_one("#dm", Input).value)
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-
-_CMD_IDS = ["btn_dm", "btn_ping", "btn_status", "btn_telemetry", "btn_login", "btn_cmd", "btn_trace", "btn_reboot"]
+_CMD_IDS = ["btn_ping", "btn_status", "btn_telemetry", "btn_login", "btn_trace", "btn_reboot"]
 # (order matches _TYPE_CMDS lists above)
 
 
@@ -177,6 +117,11 @@ class RepeatersTab(TabPane):
         height: 1fr;
         padding: 1 2;
     }
+    RepeatersTab #input_bar {
+        height: 3;
+        padding: 0 1;
+        background: $panel;
+    }
     """
 
     def __init__(self) -> None:
@@ -191,16 +136,15 @@ class RepeatersTab(TabPane):
         yield ListView(id="repeater_list")
         with Container(id="right_pane"):
             with Container(id="cmd_buttons"):
-                yield _CmdButton("DM", id="btn_dm")
                 yield _CmdButton("Ping", id="btn_ping")
                 yield _CmdButton("Status", id="btn_status")
                 yield _CmdButton("Telemetry", id="btn_telemetry")
                 yield _CmdButton("Login", id="btn_login")
-                yield _CmdButton("Cmd", id="btn_cmd")
                 yield _CmdButton("Trace", id="btn_trace")
                 yield _CmdButton("Reboot", variant="error", id="btn_reboot")
             with VerticalScroll(id="output_log"):
                 yield Static("", id="output_content", markup=True)
+            yield Input(placeholder="DM text  or  /command", id="input_bar")
 
     def on_mount(self) -> None:
         self._update_cmd_visibility()
@@ -319,14 +263,28 @@ class RepeatersTab(TabPane):
         self.query_one("#output_content", Static).update("\n".join(self._log_lines))
         self.query_one("#output_log", VerticalScroll).scroll_end(animate=False)
 
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id != "input_bar":
+            return
+        text = event.value.strip()
+        event.input.value = ""
+        if not text:
+            return
+        contact = self._selected_contact()
+        if contact is None:
+            self._log("[red]No contact selected[/red]")
+            return
+        if text.startswith("/"):
+            self._do_cmd(contact, text[1:].strip())
+        else:
+            self._do_dm(contact, text)
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         contact = self._selected_contact()
         if contact is None:
             self._log("[red]No contact selected[/red]")
             return
-        if event.button.id == "btn_dm":
-            self.app.push_screen(_DMScreen(), lambda msg: self._run_dm(contact, msg))
-        elif event.button.id == "btn_ping":
+        if event.button.id == "btn_ping":
             self._run_ping(contact)
         elif event.button.id == "btn_status":
             self._run_status(contact)
@@ -334,17 +292,10 @@ class RepeatersTab(TabPane):
             self._run_telemetry(contact)
         elif event.button.id == "btn_login":
             self.app.push_screen(_PasswordScreen(), lambda pwd: self._run_login(contact, pwd))
-        elif event.button.id == "btn_cmd":
-            self.app.push_screen(_CmdScreen(), lambda cmd: self._run_cmd(contact, cmd))
         elif event.button.id == "btn_trace":
             self._run_trace(contact)
         elif event.button.id == "btn_reboot":
             self._run_reboot(contact)
-
-    def _run_dm(self, contact: dict, msg: str | None) -> None:
-        if not msg:
-            return
-        self._do_dm(contact, msg)
 
     @work(thread=False, exclusive=False)
     async def _do_dm(self, contact: dict, msg: str) -> None:
@@ -352,7 +303,7 @@ class RepeatersTab(TabPane):
         if not manager:
             self._log("[red]Companion not connected[/red]")
             return
-        self._log(f"DM → {markup_escape(contact.get('name', '?'))}: {markup_escape(msg)}")
+        self._log(f"→ {markup_escape(contact.get('adv_name') or contact.get('name', '?'))}: {markup_escape(msg)}")
         result = await manager.send_contact_msg(contact, msg)
         self._log(f"DM: {markup_escape(result)}")
 
@@ -362,7 +313,7 @@ class RepeatersTab(TabPane):
         if not manager:
             self._log("[red]Companion not connected[/red]")
             return
-        self._log(f"ping → {markup_escape(contact.get('name', '?'))} …")
+        self._log(f"ping → {markup_escape(contact.get('adv_name') or contact.get('name', '?'))} …")
         result = await manager.send_contact_ping(contact)
         self._log(f"ping: {markup_escape(result)}")
 
@@ -372,7 +323,7 @@ class RepeatersTab(TabPane):
         if not manager:
             self._log("[red]Companion not connected[/red]")
             return
-        self._log(f"telemetry → {markup_escape(contact.get('name', '?'))} …")
+        self._log(f"telemetry → {markup_escape(contact.get('adv_name') or contact.get('name', '?'))} …")
         result = await manager.send_contact_telemetry(contact)
         self._log(f"telemetry: {markup_escape(result)}")
 
@@ -390,7 +341,7 @@ class RepeatersTab(TabPane):
         if not manager:
             self._log("[red]Companion not connected[/red]")
             return
-        self._log(f"status → {markup_escape(contact.get('name', '?'))} …")
+        self._log(f"status → {markup_escape(contact.get('adv_name') or contact.get('name', '?'))} …")
         result = await manager.send_repeater_status(contact)
         self._log(f"status: {markup_escape(result)}")
 
@@ -405,14 +356,9 @@ class RepeatersTab(TabPane):
         if not manager:
             self._log("[red]Companion not connected[/red]")
             return
-        self._log(f"login → {markup_escape(contact.get('name', '?'))} …")
+        self._log(f"login → {markup_escape(contact.get('adv_name') or contact.get('name', '?'))} …")
         result = await manager.send_repeater_login(contact, pwd)
         self._log(f"login: {markup_escape(result)}")
-
-    def _run_cmd(self, contact: dict, cmd: str | None) -> None:
-        if not cmd:
-            return
-        self._do_cmd(contact, cmd)
 
     @work(thread=False, exclusive=False)
     async def _do_cmd(self, contact: dict, cmd: str) -> None:
@@ -420,7 +366,7 @@ class RepeatersTab(TabPane):
         if not manager:
             self._log("[red]Companion not connected[/red]")
             return
-        self._log(f"cmd {markup_escape(cmd)!r} → {markup_escape(contact.get('name', '?'))} …")
+        self._log(f"cmd {markup_escape(cmd)!r} → {markup_escape(contact.get('adv_name') or contact.get('name', '?'))} …")
         result = await manager.send_repeater_cmd(contact, cmd)
         self._log(f"result: {markup_escape(result)}")
 
@@ -430,7 +376,7 @@ class RepeatersTab(TabPane):
         if not manager:
             self._log("[red]Companion not connected[/red]")
             return
-        self._log(f"trace → {markup_escape(contact.get('name', '?'))} …")
+        self._log(f"trace → {markup_escape(contact.get('adv_name') or contact.get('name', '?'))} …")
         result = await manager.send_repeater_trace(contact)
         self._log(f"trace: {markup_escape(result)}")
 
@@ -443,7 +389,7 @@ class RepeatersTab(TabPane):
             def compose(self) -> _CR:
                 with Container():
                     yield Static(
-                        f"[bold]Reboot {markup_escape(contact.get('name', '?'))}?[/bold]",
+                        f"[bold]Reboot {markup_escape(contact.get('adv_name') or contact.get('name', '?'))}?[/bold]",
                         markup=True,
                     )
                     with Horizontal():
@@ -469,7 +415,7 @@ class RepeatersTab(TabPane):
         if not manager:
             self._log("[red]Companion not connected[/red]")
             return
-        self._log(f"reboot → {markup_escape(contact.get('name', '?'))} …")
+        self._log(f"reboot → {markup_escape(contact.get('adv_name') or contact.get('name', '?'))} …")
         result = await manager.send_repeater_reboot(contact)
         self._log(f"reboot: {markup_escape(result)}")
 

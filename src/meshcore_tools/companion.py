@@ -234,8 +234,10 @@ class CompanionManager:
         await self._client.start_auto_message_fetching()
 
         logger.info("Companion connected")
-        # Notify the app — self-info may arrive asynchronously; send a placeholder
-        self._app.post_message(CompanionConnected(node_name="companion", node_key=""))
+        self_info = self._client.self_info or {}
+        node_name = self_info.get("name", "companion")
+        node_key = self_info.get("public_key", "")
+        self._app.post_message(CompanionConnected(node_name=node_name, node_key=node_key))
 
     def _subscribe_events(self) -> None:
         client = self._client
@@ -254,10 +256,19 @@ class CompanionManager:
 
         async def _on_contact_msg(event) -> None:
             d = event.payload
+            pubkey_prefix = d.get("pubkey_prefix", "")
+            sender = d.get("sender", pubkey_prefix) or pubkey_prefix
+            # If sender looks like a hex address, resolve it to a contact name
+            if sender and all(c in "0123456789abcdefABCDEF" for c in sender):
+                for c in self._contacts:
+                    pk = c.get("public_key", "") or ""
+                    if pk.startswith(sender) or sender.startswith(pk[:len(sender)]):
+                        sender = c.get("adv_name") or c.get("name") or sender
+                        break
             self._app.post_message(
                 ContactMessage(
-                    pubkey_prefix=d.get("pubkey_prefix", ""),
-                    sender=d.get("sender", d.get("pubkey_prefix", "?")),
+                    pubkey_prefix=pubkey_prefix,
+                    sender=sender or "?",
                     text=d.get("text", ""),
                     timestamp=int(d.get("timestamp", 0)),
                 )
@@ -412,7 +423,8 @@ class CompanionManager:
             result = await self._client.commands.send_path_discovery(dst=contact)
             if str(getattr(result, "type", "")) == str(_EventType.ERROR):
                 return f"error: {result.payload}"
-            response = await self._client.wait_for_event(_EventType.PATH_UPDATE, timeout=10)
+            timeout = result.payload.get("suggested_timeout", 6000) / 600
+            response = await self._client.wait_for_event(_EventType.PATH_RESPONSE, timeout=timeout)
             if response is None:
                 return "timeout"
             return str(response.payload)
