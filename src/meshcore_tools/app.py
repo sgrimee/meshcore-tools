@@ -117,10 +117,8 @@ class MeshCoreApp(App):
         atexit.register(self._sync_disconnect)
         config = load_connection_config()
         if config is not None:
-            if config.type == "ble":
-                # BLE auto-connect requires a fresh device scan (Bleak on Linux
-                # runs an internal scan when connecting by MAC alone, which
-                # blocks any concurrent manual scan). Prompt user to scan instead.
+            if config.type == "ble" and not (config.ble_name and ":" in config.ble_name):
+                # No saved MAC address — need a fresh scan to get a BleakDevice.
                 self.sub_title += "  BLE — press C to scan and connect"
             else:
                 self._do_connect(config)

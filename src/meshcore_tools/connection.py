@@ -66,6 +66,63 @@ def save_connection_config(
     path = config_dir / "connection.json"
     data = {k: v for k, v in asdict(config).items() if v is not None and k != "ble_device"}
     path.write_text(json.dumps(data, indent=2))
+    save_connection_history(config, config_dir)
+
+
+_HISTORY_MAX = 5
+
+
+def _config_key(c: ConnectionConfig) -> tuple[str, str | None, int | None, str | None, str | None]:
+    return (c.type, c.host, c.port, c.device, c.ble_name)
+
+
+def save_connection_history(
+    config: ConnectionConfig, config_dir: Path = _DEFAULT_CONFIG_DIR
+) -> None:
+    """Prepend config to the recent-connections list, deduplicating by identity."""
+    existing = load_connection_history(config_dir)
+    deduped = [h for h in existing if _config_key(h) != _config_key(config)]
+    history = ([config] + deduped)[:_HISTORY_MAX]
+    config_dir.mkdir(parents=True, exist_ok=True)
+    data = [
+        {k: v for k, v in asdict(h).items() if v is not None and k != "ble_device"}
+        for h in history
+    ]
+    (config_dir / "history.json").write_text(json.dumps(data, indent=2))
+
+
+def load_connection_history(config_dir: Path = _DEFAULT_CONFIG_DIR) -> list[ConnectionConfig]:
+    """Return recent connections, most recent first. Returns [] on any error."""
+    path = config_dir / "history.json"
+    if not path.exists():
+        return []
+    try:
+        entries = json.loads(path.read_text())
+        return [
+            ConnectionConfig(
+                type=e.get("type", "tcp"),
+                host=e.get("host"),
+                port=e.get("port"),
+                device=e.get("device"),
+                ble_name=e.get("ble_name"),
+                ble_pin=e.get("ble_pin"),
+            )
+            for e in entries
+            if isinstance(e, dict)
+        ]
+    except Exception:
+        return []
+
+
+def connection_label(c: ConnectionConfig) -> str:
+    """Human-readable one-liner for display in the Recent section."""
+    if c.type == "ble":
+        return f"BLE: {c.ble_name or '?'}"
+    if c.type == "tcp":
+        return f"TCP: {c.host or '?'}:{c.port or 5000}"
+    if c.type == "serial":
+        return f"Serial: {c.device or '?'}"
+    return c.type
 
 
 def list_serial_ports() -> list[tuple[str, str]]:
@@ -163,6 +220,14 @@ def _ble_scan_error(exc: Exception) -> str:
     return msg
 
 
+class _RecentButton(Button):
+    """A quick-connect button for a previously used connection."""
+
+    def __init__(self, config: ConnectionConfig) -> None:
+        super().__init__(connection_label(config), variant="default")
+        self.config = config
+
+
 class ConnectScreen(ModalScreen[ConnectionConfig | None]):
     """Modal for configuring and initiating a companion connection."""
 
@@ -198,6 +263,21 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
         margin-top: 1;
         color: $warning;
     }
+    ConnectScreen #recent-section {
+        margin-bottom: 1;
+    }
+    ConnectScreen #recent-section Label {
+        margin-top: 0;
+    }
+    ConnectScreen #recent-buttons {
+        layout: horizontal;
+        height: auto;
+        flex-wrap: wrap;
+    }
+    ConnectScreen #recent-buttons Button {
+        margin-right: 1;
+        margin-bottom: 1;
+    }
     """
 
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
@@ -210,6 +290,10 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
     def compose(self) -> ComposeResult:
         with Container():
             yield Static("[bold]Connect to companion device[/bold]", markup=True)
+            with Container(id="recent-section"):
+                yield Label("Recent:")
+                with Container(id="recent-buttons"):
+                    pass  # populated in on_mount
             yield Label("Connection type:")
             yield Select(
                 [("TCP", "tcp"), ("Serial", "serial"), ("BLE", "ble")],
@@ -257,6 +341,14 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
         self._show_section(self._current.type)
         if self._current.type == "serial":
             self._populate_serial_ports()
+        history = load_connection_history()
+        recent_section = self.query_one("#recent-section")
+        if history:
+            recent_buttons = self.query_one("#recent-buttons")
+            for cfg in history:
+                recent_buttons.mount(_RecentButton(cfg))
+        else:
+            recent_section.display = False
 
     def _show_section(self, conn_type: str) -> None:
         self.query_one("#tcp-section").display = (conn_type == "tcp")
@@ -359,6 +451,9 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
         self._update_connect_button()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        if isinstance(event.button, _RecentButton):
+            self.dismiss(event.button.config)
+            return
         if event.button.id == "btn_cancel":
             self.dismiss(None)
         elif event.button.id == "btn_connect":
