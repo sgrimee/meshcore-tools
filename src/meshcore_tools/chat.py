@@ -147,6 +147,7 @@ class ChatTab(TabPane):
             list_view.append(ListItem(Label(ch["name"])))
         if channels:
             self._active_channel_idx = channels[0]["idx"]
+            list_view.index = 0
             self._refresh_log()
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:

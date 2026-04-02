@@ -239,6 +239,12 @@ class RepeatersTab(TabPane):
                 if self._selected_idx is None:
                     self._selected_idx = i
 
+        # Highlight the first selectable (non-header) row
+        first_selectable = next(
+            (i for i, v in enumerate(self._list_item_map) if v is not None), None
+        )
+        if first_selectable is not None:
+            list_view.index = first_selectable
         self._update_cmd_visibility()
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:

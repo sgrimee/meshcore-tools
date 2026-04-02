@@ -351,7 +351,7 @@ class CompanionManager:
         if not self._client or not self._connected:
             return "not connected"
         try:
-            result = await self._client.commands.req_status_sync(contact)
+            result = await self._client.commands.req_status_sync(contact, min_timeout=3.0)
             if result is None:
                 return "timeout"
             return str(result)
@@ -432,12 +432,18 @@ class CompanionManager:
                 if not response_future.done():
                     response_future.set_result(event)
 
-            sub = self._client.dispatcher.subscribe(_EventType.PATH_RESPONSE, _on_path)
+            # Filter by the contact's 6-byte pubkey prefix to avoid matching
+            # a PATH_RESPONSE from a different contact
+            pubkey_pre = contact.get("public_key", "")[:12]
+            attribute_filters = {"pubkey_pre": pubkey_pre} if pubkey_pre else {}
+            sub = self._client.dispatcher.subscribe(
+                _EventType.PATH_RESPONSE, _on_path, attribute_filters or None
+            )
             try:
                 result = await self._client.commands.send_path_discovery(dst=contact)
                 if str(getattr(result, "type", "")) == str(_EventType.ERROR):
                     return f"error: {result.payload}"
-                timeout = result.payload.get("suggested_timeout", 6000) / 600
+                timeout = max(result.payload.get("suggested_timeout", 6000) / 600, 5.0)
                 try:
                     response = await _asyncio.wait_for(
                         _asyncio.shield(response_future), timeout=timeout
@@ -455,7 +461,7 @@ class CompanionManager:
         if not self._client or not self._connected:
             return "not connected"
         try:
-            result = await self._client.commands.req_telemetry_sync(contact)
+            result = await self._client.commands.req_telemetry_sync(contact, min_timeout=3.0)
             if result is None:
                 return "timeout"
             return str(result)
