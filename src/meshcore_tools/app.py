@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import asyncio
+import atexit
+
 from rich.markup import escape as markup_escape
 from textual import work
 from textual.app import App, ComposeResult
@@ -105,6 +108,7 @@ class MeshCoreApp(App):
             self.sub_title += "  [companion features require: pip install meshcore-tools[companion]]"
             return
         self.companion = CompanionManager(self)
+        atexit.register(self._sync_disconnect)
         config = load_connection_config()
         if config is not None:
             if config.type == "ble":
@@ -114,6 +118,19 @@ class MeshCoreApp(App):
                 self.sub_title += "  BLE — press C to scan and connect"
             else:
                 self._do_connect(config)
+
+    async def on_unmount(self) -> None:
+        if self.companion is not None:
+            await self.companion.disconnect()
+
+    def _sync_disconnect(self) -> None:
+        """atexit fallback: disconnect synchronously if companion is still connected."""
+        if self.companion is None or not self.companion.is_connected:
+            return
+        try:
+            asyncio.run(self.companion.disconnect())
+        except Exception:
+            pass
 
     def action_switch_tab(self, tab_id: str) -> None:
         if tab_id in ("tab_chat", "tab_repeaters") and not COMPANION_AVAILABLE:
