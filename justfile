@@ -6,6 +6,14 @@ default:
 hooks:
     git config core.hooksPath .githooks
 
+# Build sdist and wheel
+build:
+    uv build
+
+# Remove build artifacts
+clean:
+    rm -rf dist/
+
 # Sync dependencies (including optional map extras)
 sync:
     uv sync --all-extras
