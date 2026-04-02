@@ -143,13 +143,6 @@ class LogPanel(Widget):
         width: 1fr;
         height: 1;
     }
-    LogPanel #log_panel_title {
-        height: 1;
-        padding: 0 1;
-        background: $accent-darken-1;
-        color: $text;
-        text-style: bold;
-    }
     LogPanel LogView {
         height: 1fr;
     }
@@ -157,6 +150,5 @@ class LogPanel(Widget):
 
     def compose(self) -> ComposeResult:
         yield ResizeHandle(target_getter=lambda: self, min_size=4, max_size=40)
-        yield Label("Logs", id="log_panel_title")
         yield LogView()
 
