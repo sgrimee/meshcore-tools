@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Auto-focus most recent device on connection panel open
+- Add DM/ping/telemetry contact ops; fix status/ping response display
+- Display channels as vertical list on left of channels tab
+- Remember recent companions; auto-connect BLE by saved MAC
+- Rename Chat→Channels tab; contextual contacts tab
+- Use left/right keys to switch channels instead of tab
+- Auto-fetch channels on connect; suppress stderr logs in TUI
 - Add update-changelog skill for keepachangelog.com format
 - Add resize handle between detail and map panels
 - Mouse-draggable resize handles for log panel and detail/map panels
@@ -32,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add companion optional dependency (meshcore>=2.3.3)
 
 ### Changed
+- Add build and clean targets to justfile
+- Exclude dev-only files from sdist
+- Manage version in __version__.py, add CHANGELOG
 - Delete old specs
 - Remove title label from log panel
 - Remove Logs tab, keep only the bottom log panel
@@ -44,6 +54,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add companion TUI design spec
 
 ### Fixed
+- Reset to first button when contacts tab gains focus
+- Only show active-cmd button highlight when contacts tab is active
+- Ping filter, telemetry min_timeout, auto-select first list item
+- Correct ping/telemetry/status/cmd protocols; add log colours
+- Resolve DM sender name, fix ping event, inline DM/cmd input
+- Remove flex-wrap from recent-buttons in ConnectScreen
+- Load all contacts in repeaters tab; use left/right for command nav
 - Resolve all ty type-check diagnostics
 - Justfile tool name
 - Inner resize handle direction follows mouse correctly
