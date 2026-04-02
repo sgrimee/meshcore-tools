@@ -77,8 +77,23 @@ class _CmdScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+_CMD_IDS = ["btn_status", "btn_login", "btn_cmd", "btn_trace", "btn_reboot"]
+
+
+class _CmdButton(Button):
+    """Command toolbar button — not individually focusable; navigated with left/right."""
+
+    can_focus = False
+
+
 class RepeatersTab(TabPane):
     """Repeater management: list on left, commands + output log on right."""
+
+    BINDINGS = [
+        Binding("left", "prev_cmd", "Prev cmd", show=False),
+        Binding("right", "next_cmd", "Next cmd", show=False),
+        Binding("enter", "run_cmd", "Run cmd", show=False),
+    ]
 
     DEFAULT_CSS = """
     RepeatersTab {
@@ -104,6 +119,9 @@ class RepeatersTab(TabPane):
     RepeatersTab #cmd_buttons Button {
         margin-right: 1;
     }
+    RepeatersTab #cmd_buttons Button.-active-cmd {
+        border: solid $accent;
+    }
     RepeatersTab #output_log {
         height: 1fr;
         padding: 1 2;
@@ -115,30 +133,51 @@ class RepeatersTab(TabPane):
         self._repeaters: list[dict] = []
         self._selected_idx: int | None = None
         self._log_lines: list[str] = []
+        self._active_cmd_idx: int = 0
 
     def compose(self) -> ComposeResult:
         yield ListView(id="repeater_list")
         with Container(id="right_pane"):
             with Container(id="cmd_buttons"):
-                yield Button("Status", id="btn_status")
-                yield Button("Login", id="btn_login")
-                yield Button("Cmd", id="btn_cmd")
-                yield Button("Trace", id="btn_trace")
-                yield Button("Reboot", variant="error", id="btn_reboot")
+                yield _CmdButton("Status", id="btn_status")
+                yield _CmdButton("Login", id="btn_login")
+                yield _CmdButton("Cmd", id="btn_cmd")
+                yield _CmdButton("Trace", id="btn_trace")
+                yield _CmdButton("Reboot", variant="error", id="btn_reboot")
             with VerticalScroll(id="output_log"):
                 yield Static("", id="output_content", markup=True)
 
+    def on_mount(self) -> None:
+        self._highlight_active_cmd()
+
+    def _highlight_active_cmd(self) -> None:
+        for i, btn_id in enumerate(_CMD_IDS):
+            try:
+                self.query_one(f"#{btn_id}", Button).set_class(i == self._active_cmd_idx, "-active-cmd")
+            except Exception:
+                pass
+
+    def action_prev_cmd(self) -> None:
+        self._active_cmd_idx = (self._active_cmd_idx - 1) % len(_CMD_IDS)
+        self._highlight_active_cmd()
+
+    def action_next_cmd(self) -> None:
+        self._active_cmd_idx = (self._active_cmd_idx + 1) % len(_CMD_IDS)
+        self._highlight_active_cmd()
+
+    def action_run_cmd(self) -> None:
+        try:
+            self.query_one(f"#{_CMD_IDS[self._active_cmd_idx]}", Button).press()
+        except Exception:
+            pass
+
     def populate_repeaters(self, contacts: list[dict]) -> None:
-        """Called by MeshCoreApp to fill the repeater list from contacts."""
-        self._repeaters = [
-            c for c in contacts
-            if "repeater" in str(c.get("type", "")).lower()
-            or "repeater" in str(c.get("role", "")).lower()
-        ]
+        """Called by MeshCoreApp to fill the contact list."""
+        self._repeaters = contacts
         list_view = self.query_one("#repeater_list", ListView)
         list_view.clear()
         for r in self._repeaters:
-            name = r.get("name") or r.get("adv_name") or r.get("public_key", "?")[:8]
+            name = r.get("adv_name") or r.get("name") or r.get("public_key", "?")[:8]
             list_view.append(ListItem(Label(name)))
         if self._repeaters:
             self._selected_idx = 0
