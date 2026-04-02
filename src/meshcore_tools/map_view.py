@@ -160,7 +160,7 @@ if _HAS_MAP_LIBS:
                 path.write_bytes(content)
             return status, content
 else:
-    _CachedStaticMap = None  # type: ignore
+    _CachedStaticMap = None
 
 
 def _boxes_overlap(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
@@ -264,6 +264,7 @@ def _render_tile_map(
         ImageFont.load_default(size=38),
     )
 
+    assert _CachedStaticMap is not None  # only reachable when _HAS_MAP_LIBS is True
     m = _CachedStaticMap(width_px, height_px)
 
     # Path line: dark outline + white core, drawn before markers so markers sit on top

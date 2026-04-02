@@ -7,7 +7,6 @@ from collections import deque
 from datetime import datetime
 
 from textual.app import ComposeResult
-from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.message import Message
 from textual.widgets import Label, RichLog, Select
@@ -108,7 +107,7 @@ class LogView(Widget):
 
     def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id == "log_level" and event.value is not Select.BLANK:
-            self._level = int(event.value)
+            self._level = int(str(event.value))
             self._rebuild()
 
     def _rebuild(self) -> None:

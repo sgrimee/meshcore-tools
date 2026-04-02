@@ -74,6 +74,18 @@ def list_serial_ports() -> list[tuple[str, str]]:
     return [(f"{port} — {desc}", port) for port, desc, _ in sorted(ports)]
 
 
+def format_ble_devices(devices: list) -> list[tuple[str, str]]:
+    """Return (display_label, address) pairs for MeshCore BLE devices.
+
+    Filters to devices whose name starts with 'MeshCore'. Devices with no name are skipped.
+    """
+    result = []
+    for d in devices:
+        if d.name and d.name.startswith("MeshCore"):
+            result.append((f"{d.name}  {d.address}", d.address))
+    return result
+
+
 async def _known_ble_devices() -> list[tuple[str, str]]:
     """Return (display_label, address) for MeshCore devices known to BlueZ.
 
@@ -145,7 +157,7 @@ def _ble_scan_error(exc: Exception) -> str:
     if "InProgress" in msg:
         return "Scan already in progress — wait a moment and try again."
     if "NotPermitted" in msg or "NotAuthorized" in msg:
-        return f"Bluetooth permission denied.\nTry: sudo usermod -aG bluetooth $USER"
+        return "Bluetooth permission denied.\nTry: sudo usermod -aG bluetooth $USER"
     if "org.bluez.Error" in msg:
         return msg.split("] ", 1)[-1] if "] " in msg else msg
     return msg

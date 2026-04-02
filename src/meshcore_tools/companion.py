@@ -6,7 +6,7 @@ Only import it inside `try/except ImportError`.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import logging
 
@@ -162,8 +162,8 @@ class CompanionManager:
 
     def __init__(self, app: App) -> None:
         self._app = app
-        self._client: object | None = None  # MeshCore instance
-        self._contacts: list[dict] = []
+        self._client: Any = None  # MeshCore instance
+        self._contacts: list[Any] = []
         self._connected = False
 
     async def connect(self, config: ConnectionConfig) -> None:
@@ -292,7 +292,7 @@ class CompanionManager:
             self._app.post_message(CompanionDisconnected())
 
     @property
-    def contacts(self) -> list[dict]:
+    def contacts(self) -> list[Any]:
         return list(self._contacts)
 
     @property

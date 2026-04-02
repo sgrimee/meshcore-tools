@@ -1,7 +1,6 @@
 """Tests for ConnectionConfig load/save."""
 
 import json
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from meshcore_tools.connection import (
