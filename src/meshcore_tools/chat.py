@@ -21,6 +21,8 @@ _MAX_MSG_LEN = 133
 class _ChannelButton(Button):
     """A tab-strip button representing one channel."""
 
+    can_focus = False  # Tab should not stop on individual channel buttons
+
     def __init__(self, label: str, channel_idx: int) -> None:
         super().__init__(label, id=f"chan_{channel_idx}")
         self.channel_idx = channel_idx
@@ -31,6 +33,8 @@ class ChatTab(TabPane):
 
     BINDINGS = [
         Binding("enter", "send_message", "Send", show=False),
+        Binding("left", "prev_channel", "Prev channel", show=False),
+        Binding("right", "next_channel", "Next channel", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -164,11 +168,27 @@ class ChatTab(TabPane):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if not isinstance(event.button, _ChannelButton):
             return
-        self._active_channel_idx = event.button.channel_idx
+        self._select_channel(event.button.channel_idx)
+
+    def _select_channel(self, channel_idx: int) -> None:
+        self._active_channel_idx = channel_idx
         for btn in self.query(_ChannelButton):
-            btn.remove_class("-active-channel")
-        event.button.add_class("-active-channel")
+            btn.set_class(btn.channel_idx == channel_idx, "-active-channel")
         self._refresh_log()
+
+    def action_prev_channel(self) -> None:
+        if not self._channels:
+            return
+        idxs = [ch["idx"] for ch in self._channels]
+        pos = idxs.index(self._active_channel_idx) if self._active_channel_idx in idxs else 0
+        self._select_channel(idxs[(pos - 1) % len(idxs)])
+
+    def action_next_channel(self) -> None:
+        if not self._channels:
+            return
+        idxs = [ch["idx"] for ch in self._channels]
+        pos = idxs.index(self._active_channel_idx) if self._active_channel_idx in idxs else 0
+        self._select_channel(idxs[(pos + 1) % len(idxs)])
 
     def receive_channel_message(
         self,
