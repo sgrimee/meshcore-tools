@@ -52,12 +52,10 @@ class ResizeHandle(Widget):
         self._vertical = self.size.width <= 1
         if self._vertical:
             self._start_pos = event.screen_x
-            w = target.styles.width
-            self._start_size = int(w.value) if w else self._min_size
+            self._start_size = target.size.width  # actual rendered width (works for 1fr too)
         else:
             self._start_pos = event.screen_y
-            h = target.styles.height
-            self._start_size = int(h.value) if h else self._min_size
+            self._start_size = target.size.height  # actual rendered height
         self._dragging = True
         self.capture_mouse()
         event.stop()

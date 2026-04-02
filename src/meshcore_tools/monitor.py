@@ -462,6 +462,15 @@ class PacketMonitorApp(App):
         height: 1fr;
         padding: 1 2;
     }
+    #inner_resize {
+        display: none;
+        width: 1fr;
+        height: 1;
+        background: $accent 15%;
+    }
+    #inner_resize:hover {
+        background: $accent 50%;
+    }
     MapSidePanel {
         display: none;
         height: 1fr;
@@ -478,6 +487,10 @@ class PacketMonitorApp(App):
     PacketMonitorApp.panels-bottom #panel_resize {
         width: 1fr;
         height: 1;
+    }
+    PacketMonitorApp.panels-bottom #inner_resize {
+        width: 1;
+        height: 1fr;
     }
     PacketMonitorApp.panels-bottom #detail_side,
     PacketMonitorApp.panels-bottom MapSidePanel {
@@ -533,6 +546,12 @@ class PacketMonitorApp(App):
             with Container(id="panel_area"):
                 with VerticalScroll(id="detail_side"):
                     yield Static("", id="detail_content", markup=True)
+                yield ResizeHandle(
+                    target_getter=lambda: self.query_one("#detail_side"),
+                    min_size=4,
+                    max_size=200,
+                    id="inner_resize",
+                )
                 yield MapSidePanel(id="map_side")
         yield Label("", id="status")
         yield Footer()
@@ -728,10 +747,13 @@ class PacketMonitorApp(App):
         self.query_one(MapSidePanel).load_packet(self._displayed, row, self._db)
 
     def _sync_panel_area(self) -> None:
-        """Show #panel_area (and its resize handle) iff at least one side panel is open."""
+        """Show #panel_area (and resize handles) based on which panels are open."""
         visible = self._detail_panel_open or self._map_panel_open
         self.query_one("#panel_area").display = visible
         self.query_one("#panel_resize").display = visible
+        self.query_one("#inner_resize").display = (
+            self._detail_panel_open and self._map_panel_open
+        )
 
     def action_toggle_detail_panel(self) -> None:
         self._detail_panel_open = not self._detail_panel_open
@@ -868,6 +890,15 @@ class MonitorTab(TabPane):
         height: 1fr;
         padding: 1 2;
     }
+    MonitorTab #inner_resize {
+        display: none;
+        width: 1fr;
+        height: 1;
+        background: $accent 15%;
+    }
+    MonitorTab #inner_resize:hover {
+        background: $accent 50%;
+    }
     MonitorTab MapSidePanel {
         display: none;
         height: 1fr;
@@ -884,6 +915,10 @@ class MonitorTab(TabPane):
     MonitorTab.panels-bottom #panel_resize {
         width: 1fr;
         height: 1;
+    }
+    MonitorTab.panels-bottom #inner_resize {
+        width: 1;
+        height: 1fr;
     }
     MonitorTab.panels-bottom #detail_side,
     MonitorTab.panels-bottom MapSidePanel {
@@ -938,6 +973,12 @@ class MonitorTab(TabPane):
             with Container(id="panel_area"):
                 with VerticalScroll(id="detail_side"):
                     yield Static("", id="detail_content", markup=True)
+                yield ResizeHandle(
+                    target_getter=lambda: self.query_one("#detail_side"),
+                    min_size=4,
+                    max_size=200,
+                    id="inner_resize",
+                )
                 yield MapSidePanel(id="map_side")
         yield Label("", id="status")
 
@@ -1125,10 +1166,13 @@ class MonitorTab(TabPane):
         self.query_one(MapSidePanel).load_packet(self._displayed, row, self._db)
 
     def _sync_panel_area(self) -> None:
-        """Show #panel_area (and its resize handle) iff at least one side panel is open."""
+        """Show #panel_area (and resize handles) based on which panels are open."""
         visible = self._detail_panel_open or self._map_panel_open
         self.query_one("#panel_area").display = visible
         self.query_one("#panel_resize").display = visible
+        self.query_one("#inner_resize").display = (
+            self._detail_panel_open and self._map_panel_open
+        )
 
     def action_toggle_detail_panel(self) -> None:
         self._detail_panel_open = not self._detail_panel_open
