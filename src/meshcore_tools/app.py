@@ -33,6 +33,7 @@ try:
         CompanionConnected,
         CompanionConnectionError,
         CompanionDisconnected,
+        ContactMessage,
         ContactsUpdated,
         _MESHCORE_AVAILABLE as _meshcore_pkg_available,
     )
@@ -225,6 +226,19 @@ class MeshCoreApp(App):
             self.query_one(ChatTab).receive_channel_message(
                 channel_idx=message.channel_idx,
                 channel_name=message.channel_name,
+                sender=message.sender,
+                text=message.text,
+                timestamp=message.timestamp,
+            )
+        except Exception:
+            pass
+
+    def on_contact_message(self, message: "ContactMessage") -> None:
+        if not COMPANION_AVAILABLE:
+            return
+        try:
+            self.query_one(RepeatersTab).receive_contact_message(
+                pubkey_prefix=message.pubkey_prefix,
                 sender=message.sender,
                 text=message.text,
                 timestamp=message.timestamp,

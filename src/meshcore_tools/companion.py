@@ -341,7 +341,12 @@ class CompanionManager:
             return "not connected"
         try:
             result = await self._client.commands.send_statusreq(dst=contact)
-            return str(result.payload)
+            if str(getattr(result, "type", "")) == str(_EventType.ERROR):
+                return f"error: {result.payload}"
+            response = await self._client.wait_for_event(_EventType.STATUS_RESPONSE, timeout=10)
+            if response is None:
+                return "timeout"
+            return str(response.payload)
         except Exception as exc:
             return f"error: {exc}"
 
@@ -384,5 +389,47 @@ class CompanionManager:
         try:
             result = await self._client.commands.send_cmd(dst=contact, cmd="reboot")
             return str(result.payload)
+        except Exception as exc:
+            return f"error: {exc}"
+
+    async def send_contact_msg(self, contact: dict, text: str) -> str:
+        """Send a direct message to a contact. Returns result text."""
+        if not self._client or not self._connected:
+            return "not connected"
+        try:
+            result = await self._client.commands.send_msg_with_retry(dst=contact, msg=text)
+            if str(getattr(result, "type", "")) == str(_EventType.ERROR):
+                return f"error: {result.payload}"
+            return "sent"
+        except Exception as exc:
+            return f"error: {exc}"
+
+    async def send_contact_ping(self, contact: dict) -> str:
+        """Send a path-discovery ping to a contact. Returns path info or timeout."""
+        if not self._client or not self._connected:
+            return "not connected"
+        try:
+            result = await self._client.commands.send_path_discovery(dst=contact)
+            if str(getattr(result, "type", "")) == str(_EventType.ERROR):
+                return f"error: {result.payload}"
+            response = await self._client.wait_for_event(_EventType.PATH_UPDATE, timeout=10)
+            if response is None:
+                return "timeout"
+            return str(response.payload)
+        except Exception as exc:
+            return f"error: {exc}"
+
+    async def send_contact_telemetry(self, contact: dict) -> str:
+        """Request telemetry from a contact. Returns formatted telemetry string."""
+        if not self._client or not self._connected:
+            return "not connected"
+        try:
+            result = await self._client.commands.send_telemetry_req(dst=contact)
+            if str(getattr(result, "type", "")) == str(_EventType.ERROR):
+                return f"error: {result.payload}"
+            response = await self._client.wait_for_event(_EventType.TELEMETRY_RESPONSE, timeout=10)
+            if response is None:
+                return "timeout"
+            return str(response.payload)
         except Exception as exc:
             return f"error: {exc}"

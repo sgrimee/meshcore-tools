@@ -22,11 +22,11 @@ _TYPE_BADGE: dict[int, str] = {0: "???", 1: "CLI", 2: "REP", 3: "RMS", 4: "SNS"}
 
 # Which command buttons are shown for each contact type
 _TYPE_CMDS: dict[int, list[str]] = {
-    0: [],                                                     # Unknown
-    1: [],                                                     # ChatNode — DM is future work
-    2: ["btn_status", "btn_login", "btn_cmd", "btn_trace", "btn_reboot"],  # Repeater
-    3: ["btn_status", "btn_login", "btn_cmd"],                 # RoomServer
-    4: ["btn_status"],                                         # Sensor
+    0: [],                                                              # Unknown
+    1: ["btn_dm", "btn_ping", "btn_telemetry"],                        # ChatNode
+    2: ["btn_dm", "btn_ping", "btn_status", "btn_telemetry", "btn_login", "btn_cmd", "btn_trace", "btn_reboot"],  # Repeater
+    3: ["btn_status", "btn_login", "btn_cmd", "btn_ping"],             # RoomServer
+    4: ["btn_status", "btn_ping", "btn_telemetry"],                    # Sensor
 }
 
 
@@ -90,7 +90,37 @@ class _CmdScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
-_CMD_IDS = ["btn_status", "btn_login", "btn_cmd", "btn_trace", "btn_reboot"]
+class _DMScreen(ModalScreen[str | None]):
+    """Modal prompt for a direct message."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def compose(self) -> ComposeResult:
+        with Container():
+            yield Static("[bold]Direct message[/bold]", markup=True)
+            yield Label("Message:")
+            yield Input(placeholder="message…", id="dm")
+            with Horizontal():
+                yield Button("Send", variant="primary", id="btn_ok")
+                yield Button("Cancel", id="btn_cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#dm", Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn_cancel":
+            self.dismiss(None)
+        elif event.button.id == "btn_ok":
+            self.dismiss(self.query_one("#dm", Input).value)
+
+    def on_input_submitted(self, _: Input.Submitted) -> None:
+        self.dismiss(self.query_one("#dm", Input).value)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+_CMD_IDS = ["btn_dm", "btn_ping", "btn_status", "btn_telemetry", "btn_login", "btn_cmd", "btn_trace", "btn_reboot"]
 # (order matches _TYPE_CMDS lists above)
 
 
@@ -115,9 +145,16 @@ class RepeatersTab(TabPane):
         layout: horizontal;
     }
     RepeatersTab #repeater_list {
-        width: 20;
+        width: 22;
         height: 1fr;
         border-right: solid $accent;
+    }
+    RepeatersTab #repeater_list .contact-header {
+        background: $panel-darken-1;
+        color: $accent;
+        padding: 0 1;
+        text-style: bold;
+        border-top: solid $panel-lighten-1;
     }
     RepeatersTab #right_pane {
         width: 1fr;
@@ -145,6 +182,7 @@ class RepeatersTab(TabPane):
     def __init__(self) -> None:
         super().__init__("F3 Contacts", id="tab_repeaters")
         self._repeaters: list[dict] = []
+        self._list_item_map: list[int | None] = []  # list position → _repeaters index (None = header)
         self._selected_idx: int | None = None
         self._log_lines: list[str] = []
         self._active_cmd_idx: int = 0
@@ -153,7 +191,10 @@ class RepeatersTab(TabPane):
         yield ListView(id="repeater_list")
         with Container(id="right_pane"):
             with Container(id="cmd_buttons"):
+                yield _CmdButton("DM", id="btn_dm")
+                yield _CmdButton("Ping", id="btn_ping")
                 yield _CmdButton("Status", id="btn_status")
+                yield _CmdButton("Telemetry", id="btn_telemetry")
                 yield _CmdButton("Login", id="btn_login")
                 yield _CmdButton("Cmd", id="btn_cmd")
                 yield _CmdButton("Trace", id="btn_trace")
@@ -219,21 +260,51 @@ class RepeatersTab(TabPane):
         except Exception:
             pass
 
+    # Display order for contact type groups
+    _TYPE_ORDER = [1, 2, 3, 4, 0]
+    _TYPE_LABEL = {0: "Unknown", 1: "CLI", 2: "Repeaters", 3: "Room Servers", 4: "Sensors"}
+
     def populate_repeaters(self, contacts: list[dict]) -> None:
-        """Called by MeshCoreApp to fill the contact list."""
+        """Called by MeshCoreApp to fill the contact list, grouped by type."""
         self._repeaters = contacts
-        self._selected_idx = 0 if contacts else None
+        self._list_item_map = []
+        self._selected_idx = None
         list_view = self.query_one("#repeater_list", ListView)
         list_view.clear()
-        for r in self._repeaters:
+
+        # Group contacts by type
+        groups: dict[int, list[tuple[int, dict]]] = {}
+        for i, r in enumerate(self._repeaters):
             ctype = r.get("type", 0)
-            badge = _TYPE_BADGE.get(ctype, "???")
-            name = r.get("adv_name") or r.get("name") or r.get("public_key", "?")[:8]
-            list_view.append(ListItem(Label(f"[{badge}] {name}")))
+            groups.setdefault(ctype, []).append((i, r))
+
+        for ctype in self._TYPE_ORDER:
+            members = groups.get(ctype, [])
+            if not members:
+                continue
+            # Header row
+            header = ListItem(Label(f" {self._TYPE_LABEL.get(ctype, '?')} "))
+            header.add_class("contact-header")
+            list_view.append(header)
+            self._list_item_map.append(None)
+            # Contact rows
+            for i, r in members:
+                name = r.get("adv_name") or r.get("name") or r.get("public_key", "?")[:8]
+                list_view.append(ListItem(Label(f"  {name}")))
+                self._list_item_map.append(i)
+                if self._selected_idx is None:
+                    self._selected_idx = i
+
         self._update_cmd_visibility()
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
-        self._selected_idx = event.list_view.index
+        pos = event.list_view.index
+        if pos is None or pos >= len(self._list_item_map):
+            return
+        contact_idx = self._list_item_map[pos]
+        if contact_idx is None:
+            return  # header row — keep current selection
+        self._selected_idx = contact_idx
         self._active_cmd_idx = 0
         self._update_cmd_visibility()
 
@@ -253,8 +324,14 @@ class RepeatersTab(TabPane):
         if contact is None:
             self._log("[red]No contact selected[/red]")
             return
-        if event.button.id == "btn_status":
+        if event.button.id == "btn_dm":
+            self.app.push_screen(_DMScreen(), lambda msg: self._run_dm(contact, msg))
+        elif event.button.id == "btn_ping":
+            self._run_ping(contact)
+        elif event.button.id == "btn_status":
             self._run_status(contact)
+        elif event.button.id == "btn_telemetry":
+            self._run_telemetry(contact)
         elif event.button.id == "btn_login":
             self.app.push_screen(_PasswordScreen(), lambda pwd: self._run_login(contact, pwd))
         elif event.button.id == "btn_cmd":
@@ -263,6 +340,49 @@ class RepeatersTab(TabPane):
             self._run_trace(contact)
         elif event.button.id == "btn_reboot":
             self._run_reboot(contact)
+
+    def _run_dm(self, contact: dict, msg: str | None) -> None:
+        if not msg:
+            return
+        self._do_dm(contact, msg)
+
+    @work(thread=False, exclusive=False)
+    async def _do_dm(self, contact: dict, msg: str) -> None:
+        manager: CompanionManager | None = getattr(self.app, "companion", None)
+        if not manager:
+            self._log("[red]Companion not connected[/red]")
+            return
+        self._log(f"DM → {markup_escape(contact.get('name', '?'))}: {markup_escape(msg)}")
+        result = await manager.send_contact_msg(contact, msg)
+        self._log(f"DM: {markup_escape(result)}")
+
+    @work(thread=False, exclusive=False)
+    async def _run_ping(self, contact: dict) -> None:
+        manager: CompanionManager | None = getattr(self.app, "companion", None)
+        if not manager:
+            self._log("[red]Companion not connected[/red]")
+            return
+        self._log(f"ping → {markup_escape(contact.get('name', '?'))} …")
+        result = await manager.send_contact_ping(contact)
+        self._log(f"ping: {markup_escape(result)}")
+
+    @work(thread=False, exclusive=False)
+    async def _run_telemetry(self, contact: dict) -> None:
+        manager: CompanionManager | None = getattr(self.app, "companion", None)
+        if not manager:
+            self._log("[red]Companion not connected[/red]")
+            return
+        self._log(f"telemetry → {markup_escape(contact.get('name', '?'))} …")
+        result = await manager.send_contact_telemetry(contact)
+        self._log(f"telemetry: {markup_escape(result)}")
+
+    def receive_contact_message(
+        self, pubkey_prefix: str, sender: str, text: str, timestamp: int
+    ) -> None:
+        """Show an incoming DM in the output log (called by MeshCoreApp)."""
+        sender = markup_escape(sender)
+        text = markup_escape(text)
+        self._log(f"[bold]{sender}:[/bold] {text}")
 
     @work(thread=False, exclusive=False)
     async def _run_status(self, contact: dict) -> None:
@@ -356,6 +476,7 @@ class RepeatersTab(TabPane):
     def clear(self) -> None:
         """Clear log and contact list (called on disconnect)."""
         self._repeaters = []
+        self._list_item_map = []
         self._selected_idx = None
         self._log_lines = []
         self.query_one("#repeater_list", ListView).clear()
