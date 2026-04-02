@@ -147,16 +147,14 @@ class ChatTab(TabPane):
         self.query_one("#msg_content", Static).update("\n".join(lines))
         self.query_one("#msg_log", VerticalScroll).scroll_end(animate=False)
 
-    def populate_channels(self, contacts: list[dict]) -> None:
-        """Called by MeshCoreApp after companion connects with fresh contacts.
-
-        TODO: Populate additional channels from contacts list (e.g. per-contact
-        private channels). Currently only the #public broadcast channel (idx=0)
-        is shown.
-        """
-        self._channels = [{"idx": 0, "name": "#public"}]
+    def populate_channels(self, channels: list[dict]) -> None:
+        """Called by MeshCoreApp after channels are fetched from the device."""
+        self._channels = channels
         strip = self.query_one("#channel_strip", Container)
         strip.remove_children()
+        if not channels:
+            strip.mount(Static("No channels", id="no_channels_hint"))
+            return
         for ch in self._channels:
             btn = _ChannelButton(ch["name"], ch["idx"])
             if ch["idx"] == self._active_channel_idx:
@@ -191,7 +189,8 @@ class ChatTab(TabPane):
             self._refresh_log()
 
     def clear(self) -> None:
-        """Clear all messages (called on disconnect)."""
+        """Clear all messages and channels (called on disconnect)."""
         self._messages.clear()
-        self._channels = []
+        self._active_channel_idx = 0
         self._refresh_log()
+        self.populate_channels([])

@@ -29,6 +29,7 @@ try:
     from meshcore_tools.companion import (
         CompanionManager,
         ChannelMessage,
+        ChannelsUpdated,
         CompanionConnected,
         CompanionConnectionError,
         CompanionDisconnected,
@@ -100,8 +101,13 @@ class MeshCoreApp(App):
     def on_mount(self) -> None:
         import logging
         panel_view = self.query_one(LogPanel).query_one(LogView)
-        logging.getLogger().addHandler(TuiLogHandler(panel_view))
-        logging.getLogger().setLevel(logging.DEBUG)
+        root = logging.getLogger()
+        # Remove any StreamHandlers that write to stderr/stdout — they corrupt the TUI.
+        # FileHandlers (e.g. from --log-file) are a subclass of StreamHandler; keep them.
+        root.handlers = [h for h in root.handlers if isinstance(h, logging.FileHandler)]
+        root.addHandler(TuiLogHandler(panel_view))
+        root.setLevel(logging.DEBUG)
+        logging.captureWarnings(True)  # route Python warnings through the logging system
 
         self.sub_title = f"region={self._region}  poll={self._poll_interval}s"
         if not COMPANION_AVAILABLE:
@@ -202,8 +208,15 @@ class MeshCoreApp(App):
         if not COMPANION_AVAILABLE:
             return
         try:
-            self.query_one(ChatTab).populate_channels(message.contacts)
             self.query_one(RepeatersTab).populate_repeaters(message.contacts)
+        except Exception:
+            pass
+
+    def on_channels_updated(self, message: "ChannelsUpdated") -> None:
+        if not COMPANION_AVAILABLE:
+            return
+        try:
+            self.query_one(ChatTab).populate_channels(message.channels)
         except Exception:
             pass
 

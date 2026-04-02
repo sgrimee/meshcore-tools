@@ -92,6 +92,14 @@ class ContactsUpdated(Message):
         self.contacts = contacts
 
 
+class ChannelsUpdated(Message):
+    """Posted when the device channels are fetched after connecting."""
+
+    def __init__(self, channels: list[dict]) -> None:
+        super().__init__()
+        self.channels = channels
+
+
 # ---------------------------------------------------------------------------
 # Error translation
 # ---------------------------------------------------------------------------
@@ -222,6 +230,7 @@ class CompanionManager:
         self._connected = True
         self._subscribe_events()
         await self._fetch_contacts()
+        await self._fetch_channels()
         await self._client.start_auto_message_fetching()
 
         logger.info("Companion connected")
@@ -262,6 +271,21 @@ class CompanionManager:
         client.subscribe(_EventType.CHANNEL_MSG_RECV, _on_channel_msg)
         client.subscribe(_EventType.CONTACT_MSG_RECV, _on_contact_msg)
         client.subscribe(_EventType.DISCONNECTED, _on_disconnected)
+
+    async def _fetch_channels(self) -> None:
+        channels: list[dict] = []
+        for idx in range(8):  # meshcore supports up to 8 configured channels
+            result = await self._client.commands.get_channel(idx)
+            if result is None or str(result.type) == str(_EventType.ERROR):
+                break
+            payload = result.payload
+            name = payload.get("channel_name", "").rstrip("\x00").strip()
+            if not name:
+                name = f"#{idx}"
+            channels.append({"idx": idx, "name": name})
+        if not channels:
+            channels = [{"idx": 0, "name": "#public"}]
+        self._app.post_message(ChannelsUpdated(channels=channels))
 
     async def _fetch_contacts(self) -> None:
         result = await self._client.commands.get_contacts()
