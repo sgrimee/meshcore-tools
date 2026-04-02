@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from rich.markup import escape as markup_escape
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -12,7 +13,7 @@ from textual.widgets import Footer, Header, TabbedContent
 if TYPE_CHECKING:
     from meshcore_tools.providers import PacketProvider
 
-from meshcore_tools.logtab import LogTab, TuiLogHandler
+from meshcore_tools.logtab import LogPanel, LogTab, LogView, TuiLogHandler
 from meshcore_tools.monitor import MonitorTab
 from meshcore_tools.connection import (
     ConnectScreen,
@@ -48,6 +49,9 @@ class MeshCoreApp(App):
         Binding("f2", "switch_tab('tab_chat')", "Chat", show=False),
         Binding("f3", "switch_tab('tab_repeaters')", "Repeaters", show=False),
         Binding("f4", "switch_tab('tab_logs')", "Logs", show=False),
+        Binding("l", "toggle_log_panel", "Log Panel"),
+        Binding("+", "log_panel_grow", "Log +", show=False),
+        Binding("-", "log_panel_shrink", "Log -", show=False),
         Binding("C", "connect", "Connect"),
         Binding("q", "quit", "Quit"),
     ]
@@ -74,6 +78,7 @@ class MeshCoreApp(App):
         self._poll_interval = poll_interval
         self._channels_path = channels_path
         self.companion: CompanionManager | None = None
+        self._log_panel_open: bool = False
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -88,12 +93,14 @@ class MeshCoreApp(App):
                 yield ChatTab()
                 yield RepeatersTab()
             yield LogTab()
+        yield LogPanel(id="log_panel")
         yield Footer()
 
     def on_mount(self) -> None:
         import logging
-        log_tab = self.query_one(LogTab)
-        logging.getLogger().addHandler(TuiLogHandler(log_tab))
+        tab_view = self.query_one(LogTab).query_one(LogView)
+        panel_view = self.query_one(LogPanel).query_one(LogView)
+        logging.getLogger().addHandler(TuiLogHandler(tab_view, panel_view))
         logging.getLogger().setLevel(logging.DEBUG)
 
         self.sub_title = f"region={self._region}  poll={self._poll_interval}s"
@@ -118,6 +125,29 @@ class MeshCoreApp(App):
             self.query_one(TabbedContent).active = tab_id
         except Exception:
             pass
+
+    def _sync_log_panel(self) -> None:
+        logs_tab_active = self.query_one(TabbedContent).active == "tab_logs"
+        self.query_one(LogPanel).display = self._log_panel_open and not logs_tab_active
+
+    def action_toggle_log_panel(self) -> None:
+        self._log_panel_open = not self._log_panel_open
+        self._sync_log_panel()
+
+    def action_log_panel_grow(self) -> None:
+        panel = self.query_one(LogPanel)
+        if panel.display:
+            h = panel.styles.height
+            panel.styles.height = min((h.value if h else 10) + 2, 40)
+
+    def action_log_panel_shrink(self) -> None:
+        panel = self.query_one(LogPanel)
+        if panel.display:
+            h = panel.styles.height
+            panel.styles.height = max((h.value if h else 10) - 2, 4)
+
+    def on_tabbed_content_tab_activated(self, _: TabbedContent.TabActivated) -> None:
+        self._sync_log_panel()
 
     def action_connect(self) -> None:
         if not COMPANION_AVAILABLE:

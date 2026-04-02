@@ -7,9 +7,11 @@ from collections import deque
 from datetime import datetime
 
 from textual.app import ComposeResult
-from textual.containers import Container, Horizontal
+from textual.binding import Binding
+from textual.containers import Horizontal
 from textual.message import Message
 from textual.widgets import Label, RichLog, Select, TabPane
+from textual.widget import Widget
 
 
 _LEVEL_COLORS: dict[int, str] = {
@@ -30,7 +32,7 @@ _LEVELS: list[tuple[str, int]] = [
 
 
 class NewLogRecord(Message):
-    """Carries a logging.LogRecord from TuiLogHandler to LogTab."""
+    """Carries a logging.LogRecord from TuiLogHandler to a log view."""
 
     def __init__(self, record: logging.LogRecord) -> None:
         super().__init__()
@@ -38,50 +40,51 @@ class NewLogRecord(Message):
 
 
 class TuiLogHandler(logging.Handler):
-    """Logging handler that forwards records to LogTab via Textual's message system.
+    """Logging handler that forwards records to one or more LogView widgets.
 
     post_message() is thread-safe, so this handler is safe to use from any thread
     or coroutine.
     """
 
-    def __init__(self, log_tab: LogTab) -> None:
+    def __init__(self, *targets: "LogView") -> None:
         super().__init__(level=logging.DEBUG)
-        self._log_tab = log_tab
+        self._targets = list(targets)
 
     def emit(self, record: logging.LogRecord) -> None:
-        try:
-            self._log_tab.post_message(NewLogRecord(record))
-        except Exception:
-            pass  # logging handlers must never raise
+        for target in self._targets:
+            try:
+                target.post_message(NewLogRecord(record))
+            except Exception:
+                pass  # logging handlers must never raise
 
 
-class LogTab(TabPane):
-    """Live log viewer: scrollable log output with an inline level selector."""
+class LogView(Widget):
+    """Core log display: level-filter toolbar + scrollable RichLog."""
 
     DEFAULT_CSS = """
-    LogTab {
+    LogView {
         layout: vertical;
     }
-    LogTab #log_toolbar {
+    LogView #log_toolbar {
         height: 3;
         padding: 0 1;
         align: left middle;
     }
-    LogTab #log_toolbar Label {
+    LogView #log_toolbar Label {
         margin-right: 1;
         content-align: left middle;
         height: 3;
     }
-    LogTab #log_level {
+    LogView #log_level {
         width: 20;
     }
-    LogTab RichLog {
+    LogView RichLog {
         height: 1fr;
     }
     """
 
     def __init__(self) -> None:
-        super().__init__("Logs", id="tab_logs")
+        super().__init__()
         self._records: deque[logging.LogRecord] = deque(maxlen=1000)
         self._level: int = logging.INFO
 
@@ -123,3 +126,41 @@ class LogTab(TabPane):
         log_output.write(
             f"[dim]{ts}[/] [{color}]{record.levelname:<8}[/] [dim]{name}[/] {msg}"
         )
+
+
+class LogTab(TabPane):
+    """Live log viewer tab — wraps LogView inside a TabbedContent tab."""
+
+    def __init__(self) -> None:
+        super().__init__("Logs", id="tab_logs")
+
+    def compose(self) -> ComposeResult:
+        yield LogView()
+
+
+class LogPanel(Widget):
+    """Bottom log panel: full-width, always below TabbedContent, toggleable via l."""
+
+    DEFAULT_CSS = """
+    LogPanel {
+        display: none;
+        height: 10;
+        border-top: solid $accent;
+        layout: vertical;
+    }
+    LogPanel #log_panel_title {
+        height: 1;
+        padding: 0 1;
+        background: $accent-darken-1;
+        color: $text;
+        text-style: bold;
+    }
+    LogPanel LogView {
+        height: 1fr;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield Label("Logs", id="log_panel_title")
+        yield LogView()
+
