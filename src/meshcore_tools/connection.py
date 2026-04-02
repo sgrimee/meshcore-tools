@@ -344,8 +344,14 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
         recent_section = self.query_one("#recent-section")
         if history:
             recent_buttons = self.query_one("#recent-buttons")
+            first_btn: _RecentButton | None = None
             for cfg in history:
-                recent_buttons.mount(_RecentButton(cfg))
+                btn = _RecentButton(cfg)
+                recent_buttons.mount(btn)
+                if first_btn is None:
+                    first_btn = btn
+            if first_btn is not None:
+                self.call_after_refresh(first_btn.focus)
         else:
             recent_section.display = False
 
