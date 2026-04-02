@@ -13,6 +13,8 @@ from textual.message import Message
 from textual.widgets import Label, RichLog, Select
 from textual.widget import Widget
 
+from meshcore_tools.resize_handle import ResizeHandle
+
 
 _LEVEL_COLORS: dict[int, str] = {
     logging.DEBUG: "dim",
@@ -135,8 +137,11 @@ class LogPanel(Widget):
     LogPanel {
         display: none;
         height: 10;
-        border-top: solid $accent;
         layout: vertical;
+    }
+    LogPanel ResizeHandle {
+        width: 1fr;
+        height: 1;
     }
     LogPanel #log_panel_title {
         height: 1;
@@ -151,6 +156,7 @@ class LogPanel(Widget):
     """
 
     def compose(self) -> ComposeResult:
+        yield ResizeHandle(target_getter=lambda: self, min_size=4, max_size=40)
         yield Label("Logs", id="log_panel_title")
         yield LogView()
 

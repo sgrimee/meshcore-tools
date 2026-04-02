@@ -26,6 +26,7 @@ from meshcore_tools.db import is_input_node, learn_from_advert, load_db, resolve
 from meshcore_tools.decoder import GROUP_TYPES, decode_packet
 from meshcore_tools.map_view import MapSidePanel, PacketMapScreen
 from meshcore_tools.channels import build_channel_lookup, load_channels, try_decrypt
+from meshcore_tools.resize_handle import ResizeHandle
 
 MAX_PACKETS = 500
 
@@ -445,8 +446,16 @@ class PacketMonitorApp(App):
         layout: vertical;
         width: 60;
         height: 1fr;
-        border-left: solid $accent;
         background: $surface;
+    }
+    #panel_resize {
+        display: none;
+        width: 1;
+        height: 1fr;
+        background: $accent 15%;
+    }
+    #panel_resize:hover {
+        background: $accent 50%;
     }
     #detail_side {
         display: none;
@@ -465,8 +474,10 @@ class PacketMonitorApp(App):
         layout: horizontal;
         width: 1fr;
         height: 18;
-        border-left: none;
-        border-top: solid $accent;
+    }
+    PacketMonitorApp.panels-bottom #panel_resize {
+        width: 1fr;
+        height: 1;
     }
     PacketMonitorApp.panels-bottom #detail_side,
     PacketMonitorApp.panels-bottom MapSidePanel {
@@ -513,6 +524,12 @@ class PacketMonitorApp(App):
         yield Header(show_clock=True)
         with Container(id="main_area"):
             yield DataTable(id="packets")
+            yield ResizeHandle(
+                target_getter=lambda: self.query_one("#panel_area"),
+                min_size=20,
+                max_size=150,
+                id="panel_resize",
+            )
             with Container(id="panel_area"):
                 with VerticalScroll(id="detail_side"):
                     yield Static("", id="detail_content", markup=True)
@@ -711,10 +728,10 @@ class PacketMonitorApp(App):
         self.query_one(MapSidePanel).load_packet(self._displayed, row, self._db)
 
     def _sync_panel_area(self) -> None:
-        """Show #panel_area iff at least one side panel is open."""
-        self.query_one("#panel_area").display = (
-            self._detail_panel_open or self._map_panel_open
-        )
+        """Show #panel_area (and its resize handle) iff at least one side panel is open."""
+        visible = self._detail_panel_open or self._map_panel_open
+        self.query_one("#panel_area").display = visible
+        self.query_one("#panel_resize").display = visible
 
     def action_toggle_detail_panel(self) -> None:
         self._detail_panel_open = not self._detail_panel_open
@@ -835,8 +852,16 @@ class MonitorTab(TabPane):
         layout: vertical;
         width: 60;
         height: 1fr;
-        border-left: solid $accent;
         background: $surface;
+    }
+    MonitorTab #panel_resize {
+        display: none;
+        width: 1;
+        height: 1fr;
+        background: $accent 15%;
+    }
+    MonitorTab #panel_resize:hover {
+        background: $accent 50%;
     }
     MonitorTab #detail_side {
         display: none;
@@ -855,8 +880,10 @@ class MonitorTab(TabPane):
         layout: horizontal;
         width: 1fr;
         height: 18;
-        border-left: none;
-        border-top: solid $accent;
+    }
+    MonitorTab.panels-bottom #panel_resize {
+        width: 1fr;
+        height: 1;
     }
     MonitorTab.panels-bottom #detail_side,
     MonitorTab.panels-bottom MapSidePanel {
@@ -902,6 +929,12 @@ class MonitorTab(TabPane):
     def compose(self) -> ComposeResult:
         with Container(id="main_area"):
             yield DataTable(id="packets")
+            yield ResizeHandle(
+                target_getter=lambda: self.query_one("#panel_area"),
+                min_size=20,
+                max_size=150,
+                id="panel_resize",
+            )
             with Container(id="panel_area"):
                 with VerticalScroll(id="detail_side"):
                     yield Static("", id="detail_content", markup=True)
@@ -1092,10 +1125,10 @@ class MonitorTab(TabPane):
         self.query_one(MapSidePanel).load_packet(self._displayed, row, self._db)
 
     def _sync_panel_area(self) -> None:
-        """Show #panel_area iff at least one side panel is open."""
-        self.query_one("#panel_area").display = (
-            self._detail_panel_open or self._map_panel_open
-        )
+        """Show #panel_area (and its resize handle) iff at least one side panel is open."""
+        visible = self._detail_panel_open or self._map_panel_open
+        self.query_one("#panel_area").display = visible
+        self.query_one("#panel_resize").display = visible
 
     def action_toggle_detail_panel(self) -> None:
         self._detail_panel_open = not self._detail_panel_open
