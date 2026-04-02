@@ -4,6 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 See README.md for usage, commands, input file format, and data sources.
 
+## Platform support
+
+This project must work on both macOS and Linux.
+
 ## Architecture
 
 CLI entry point: `meshcore-tools` (defined in `[project.scripts]` in `pyproject.toml`).
