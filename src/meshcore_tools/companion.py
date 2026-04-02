@@ -84,6 +84,15 @@ class ContactMessage(Message):
         self.timestamp = timestamp
 
 
+class ContactLoginChanged(Message):
+    """Posted when a contact login succeeds or fails."""
+
+    def __init__(self, pubkey_prefix: str, success: bool) -> None:
+        super().__init__()
+        self.pubkey_prefix = pubkey_prefix
+        self.success = success
+
+
 class ContactsUpdated(Message):
     """Posted when the contacts list is fetched or refreshed."""
 
@@ -279,9 +288,19 @@ class CompanionManager:
             logger.debug("Companion disconnected")
             self._app.post_message(CompanionDisconnected())
 
+        async def _on_login_success(event) -> None:
+            prefix = event.payload.get("pubkey_prefix", "")
+            self._app.post_message(ContactLoginChanged(pubkey_prefix=prefix, success=True))
+
+        async def _on_login_failed(event) -> None:
+            prefix = event.payload.get("pubkey_prefix", "")
+            self._app.post_message(ContactLoginChanged(pubkey_prefix=prefix, success=False))
+
         client.subscribe(_EventType.CHANNEL_MSG_RECV, _on_channel_msg)
         client.subscribe(_EventType.CONTACT_MSG_RECV, _on_contact_msg)
         client.subscribe(_EventType.DISCONNECTED, _on_disconnected)
+        client.subscribe(_EventType.LOGIN_SUCCESS, _on_login_success)
+        client.subscribe(_EventType.LOGIN_FAILED, _on_login_failed)
 
     async def _fetch_channels(self) -> None:
         channels: list[dict] = []
@@ -381,16 +400,56 @@ class CompanionManager:
             return f"error: {exc}"
 
     async def send_repeater_trace(self, contact: dict) -> str:
-        """Trace route to a repeater."""
+        """Trace route to a repeater. Returns formatted SNR path or timeout."""
         if not self._client or not self._connected:
             return "not connected"
         try:
+            # Determine hash length from the device's path hash mode
+            path_hash_mode = await self._client.commands.get_path_hash_mode()
+            path_hash_len = path_hash_mode + 1  # bytes per hash element
+            if path_hash_len == 3:
+                path_hash_len = 2  # firmware only supports 1 or 2
+            flags = path_hash_len - 1  # 0→1-byte hashes, 1→2-byte hashes
+
+            out_path = contact.get("out_path", "")
+            path_len = contact.get("out_path_len", -1)
+            if path_len == -1:
+                return "error: no path (flood routing)"
+
+            # Build trace path string (no commas), matching meshcore-cli print_trace_to
+            trace = ""
+            if contact.get("type") in (2, 3):
+                trace = contact.get("public_key", "")[:2 * path_hash_len]
+            for i in range(path_len):
+                elem = out_path[2 * path_hash_len * (path_len - i - 1):2 * path_hash_len * (path_len - i)]
+                trace = elem if trace == "" else f"{elem}{trace}{elem}"
+
+            if not trace:
+                return "error: cannot build trace path"
+
             result = await self._client.commands.send_trace(
-                auth_code=0, tag=None, flags=None, path=None
+                path=bytes.fromhex(trace), flags=flags
             )
             if str(getattr(result, "type", "")) == str(_EventType.ERROR):
                 return f"error: {result.payload}"
-            return "sent"
+
+            tag = int.from_bytes(result.payload.get("expected_ack", b"\x00\x00\x00\x00"), byteorder="little")
+            timeout = max(result.payload.get("suggested_timeout", 6000) / 1000 * 1.2, 5.0)
+            response = await self._client.dispatcher.wait_for_event(
+                _EventType.TRACE_DATA, attribute_filters={"tag": tag}, timeout=timeout
+            )
+            if response is None:
+                return "timeout"
+            path_nodes = response.payload.get("path", [])
+            if not path_nodes:
+                return "no path data"
+            parts = []
+            for node in path_nodes:
+                snr = node.get("snr")
+                h = node.get("hash", "")
+                snr_str = f"{snr:+.1f}dB" if snr is not None else "?"
+                parts.append(f"{h}({snr_str})" if h else f"self({snr_str})")
+            return " → ".join(parts)
         except Exception as exc:
             return f"error: {exc}"
 
@@ -420,39 +479,19 @@ class CompanionManager:
 
     async def send_contact_ping(self, contact: dict) -> str:
         """Send a path-discovery ping to a contact. Returns path info or timeout."""
-        import asyncio as _asyncio
         if not self._client or not self._connected:
             return "not connected"
         try:
-            # Pre-subscribe BEFORE sending to avoid missing a fast response
-            loop = _asyncio.get_event_loop()
-            response_future: _asyncio.Future = loop.create_future()
-
-            def _on_path(event: Any) -> None:
-                if not response_future.done():
-                    response_future.set_result(event)
-
-            # Filter by the contact's 6-byte pubkey prefix to avoid matching
-            # a PATH_RESPONSE from a different contact
-            pubkey_pre = contact.get("public_key", "")[:12]
-            attribute_filters = {"pubkey_pre": pubkey_pre} if pubkey_pre else {}
-            sub = self._client.dispatcher.subscribe(
-                _EventType.PATH_RESPONSE, _on_path, attribute_filters or None
+            result = await self._client.commands.send_path_discovery(dst=contact)
+            if str(getattr(result, "type", "")) == str(_EventType.ERROR):
+                return f"error: {result.payload}"
+            timeout = max(result.payload.get("suggested_timeout", 6000) / 600, 5.0)
+            response = await self._client.dispatcher.wait_for_event(
+                _EventType.PATH_RESPONSE, timeout=timeout
             )
-            try:
-                result = await self._client.commands.send_path_discovery(dst=contact)
-                if str(getattr(result, "type", "")) == str(_EventType.ERROR):
-                    return f"error: {result.payload}"
-                timeout = max(result.payload.get("suggested_timeout", 6000) / 600, 5.0)
-                try:
-                    response = await _asyncio.wait_for(
-                        _asyncio.shield(response_future), timeout=timeout
-                    )
-                    return str(response.payload)
-                except _asyncio.TimeoutError:
-                    return "timeout"
-            finally:
-                sub.unsubscribe()
+            if response is None:
+                return "timeout"
+            return str(response.payload)
         except Exception as exc:
             return f"error: {exc}"
 
@@ -461,9 +500,15 @@ class CompanionManager:
         if not self._client or not self._connected:
             return "not connected"
         try:
-            result = await self._client.commands.req_telemetry_sync(contact, min_timeout=3.0)
-            if result is None:
+            result = await self._client.commands.send_telemetry_req(dst=contact)
+            if str(getattr(result, "type", "")) == str(_EventType.ERROR):
+                return f"error: {result.payload}"
+            timeout = max(result.payload.get("suggested_timeout", 6000) / 600, 5.0)
+            response = await self._client.dispatcher.wait_for_event(
+                _EventType.TELEMETRY_RESPONSE, timeout=timeout
+            )
+            if response is None:
                 return "timeout"
-            return str(result)
+            return str(response.payload)
         except Exception as exc:
             return f"error: {exc}"

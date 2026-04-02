@@ -23,7 +23,7 @@ _TYPE_BADGE: dict[int, str] = {0: "???", 1: "CLI", 2: "REP", 3: "RMS", 4: "SNS"}
 # Which command buttons are shown for each contact type
 _TYPE_CMDS: dict[int, list[str]] = {
     0: [],                                                              # Unknown
-    1: ["btn_ping", "btn_telemetry"],                                   # ChatNode
+    1: ["btn_telemetry"],                                               # ChatNode
     2: ["btn_ping", "btn_status", "btn_telemetry", "btn_login", "btn_trace", "btn_reboot"],  # Repeater
     3: ["btn_status", "btn_login", "btn_ping"],                         # RoomServer
     4: ["btn_status", "btn_ping", "btn_telemetry"],                     # Sensor
@@ -129,9 +129,10 @@ class RepeatersTab(TabPane):
         self._repeaters: list[dict] = []
         self._list_item_map: list[int | None] = []  # list position → _repeaters index (None = header)
         self._selected_idx: int | None = None
-        self._log_lines: list[str] = []
+        self._contact_logs: dict[int, list[str]] = {}
         self._active_cmd_idx: int = 0
         self._tab_active: bool = False
+        self._login_state: dict[int, bool] = {}  # contact index → logged in
 
     def compose(self) -> ComposeResult:
         yield ListView(id="repeater_list")
@@ -165,6 +166,29 @@ class RepeatersTab(TabPane):
         if visible_ids:
             self._active_cmd_idx = min(self._active_cmd_idx, len(visible_ids) - 1)
         self._highlight_active_cmd()
+        self._update_login_button()
+        self._update_input_placeholder(ctype)
+
+    def _update_login_button(self) -> None:
+        """Update the Login button label to reflect current login state."""
+        try:
+            btn = self.query_one("#btn_login", Button)
+        except Exception:
+            return
+        logged_in = self._login_state.get(self._selected_idx, False) if self._selected_idx is not None else False
+        btn.label = "Logged in" if logged_in else "Login"
+        btn.variant = "success" if logged_in else "default"
+
+    def _update_input_placeholder(self, ctype: int) -> None:
+        """Update input placeholder text based on contact type."""
+        try:
+            inp = self.query_one("#input_bar", Input)
+        except Exception:
+            return
+        if ctype == 2:  # Repeater — no DMs
+            inp.placeholder = "command"
+        else:
+            inp.placeholder = "DM text  or  /command"
 
     def _highlight_active_cmd(self) -> None:
         contact = self._selected_contact()
@@ -268,17 +292,26 @@ class RepeatersTab(TabPane):
         self._selected_idx = contact_idx
         self._active_cmd_idx = 0
         self._update_cmd_visibility()
+        self._refresh_log()
 
     def _selected_contact(self) -> dict | None:
         if self._selected_idx is None or self._selected_idx >= len(self._repeaters):
             return None
         return self._repeaters[self._selected_idx]
 
-    def _log(self, line: str, style: str = "") -> None:
+    def _log(self, line: str, style: str = "", *, idx: int | None = None) -> None:
+        if idx is None:
+            idx = self._selected_idx
         ts = datetime.now(timezone.utc).astimezone().strftime("%H:%M")
         entry = f"[dim]{ts}[/dim]  {f'[{style}]{line}[/{style}]' if style else line}"
-        self._log_lines.append(entry)
-        self.query_one("#output_content", Static).update("\n".join(self._log_lines))
+        if idx is not None:
+            self._contact_logs.setdefault(idx, []).append(entry)
+        if idx == self._selected_idx:
+            self._refresh_log()
+
+    def _refresh_log(self) -> None:
+        lines = self._contact_logs.get(self._selected_idx, []) if self._selected_idx is not None else []
+        self.query_one("#output_content", Static).update("\n".join(lines))
         self.query_one("#output_log", VerticalScroll).scroll_end(animate=False)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -292,135 +325,154 @@ class RepeatersTab(TabPane):
         if contact is None:
             self._log("No contact selected", "red")
             return
-        if text.startswith("/"):
-            self._do_cmd(contact, text[1:].strip())
+        contact_idx = self._selected_idx
+        if contact.get("type", 0) == 2:
+            self._do_cmd(contact, contact_idx, text.lstrip("/").strip())
+        elif text.startswith("/"):
+            self._do_cmd(contact, contact_idx, text[1:].strip())
         else:
-            self._do_dm(contact, text)
+            self._do_dm(contact, contact_idx, text)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         contact = self._selected_contact()
         if contact is None:
             self._log("No contact selected", "red")
             return
+        contact_idx = self._selected_idx
         if event.button.id == "btn_ping":
-            self._run_ping(contact)
+            self._run_ping(contact, contact_idx)
         elif event.button.id == "btn_status":
-            self._run_status(contact)
+            self._run_status(contact, contact_idx)
         elif event.button.id == "btn_telemetry":
-            self._run_telemetry(contact)
+            self._run_telemetry(contact, contact_idx)
         elif event.button.id == "btn_login":
-            self.app.push_screen(_PasswordScreen(), lambda pwd: self._run_login(contact, pwd))
+            self.app.push_screen(_PasswordScreen(), lambda pwd: self._run_login(contact, contact_idx, pwd))
         elif event.button.id == "btn_trace":
-            self._run_trace(contact)
+            self._run_trace(contact, contact_idx)
         elif event.button.id == "btn_reboot":
-            self._run_reboot(contact)
-
-    def _contact_name(self, contact: dict) -> str:
-        return markup_escape(contact.get("adv_name") or contact.get("name", "?"))
+            self._run_reboot(contact, contact_idx)
 
     @work(thread=False, exclusive=False)
-    async def _do_dm(self, contact: dict, msg: str) -> None:
+    async def _do_dm(self, contact: dict, contact_idx: int | None, msg: str) -> None:
         manager: CompanionManager | None = getattr(self.app, "companion", None)
         if not manager:
-            self._log("Companion not connected", "red")
+            self._log("Companion not connected", "red", idx=contact_idx)
             return
-        self._log(f"→ {self._contact_name(contact)}: {markup_escape(msg)}", "cyan")
+        self._log(f"→ {markup_escape(msg)}", "cyan", idx=contact_idx)
         result = await manager.send_contact_msg(contact, msg)
         if result.startswith("error"):
-            self._log(f"DM: {markup_escape(result)}", "red")
+            self._log(f"DM: {markup_escape(result)}", "red", idx=contact_idx)
         else:
-            self._log(f"DM: {markup_escape(result)}", "green")
+            self._log(f"DM: {markup_escape(result)}", "green", idx=contact_idx)
 
     @work(thread=False, exclusive=False)
-    async def _run_ping(self, contact: dict) -> None:
+    async def _run_ping(self, contact: dict, contact_idx: int | None) -> None:
         manager: CompanionManager | None = getattr(self.app, "companion", None)
         if not manager:
-            self._log("Companion not connected", "red")
+            self._log("Companion not connected", "red", idx=contact_idx)
             return
-        self._log(f"ping → {self._contact_name(contact)} …", "dim")
+        self._log("ping …", "dim", idx=contact_idx)
         result = await manager.send_contact_ping(contact)
         if result in ("timeout", "not connected") or result.startswith("error"):
-            self._log(f"ping: {markup_escape(result)}", "red")
+            self._log(f"ping: {markup_escape(result)}", "red", idx=contact_idx)
         else:
-            self._log(f"ping: {markup_escape(result)}", "yellow")
+            self._log(f"ping: {markup_escape(result)}", "yellow", idx=contact_idx)
 
     @work(thread=False, exclusive=False)
-    async def _run_telemetry(self, contact: dict) -> None:
+    async def _run_telemetry(self, contact: dict, contact_idx: int | None) -> None:
         manager: CompanionManager | None = getattr(self.app, "companion", None)
         if not manager:
-            self._log("Companion not connected", "red")
+            self._log("Companion not connected", "red", idx=contact_idx)
             return
-        self._log(f"telemetry → {self._contact_name(contact)} …", "dim")
+        self._log("telemetry …", "dim", idx=contact_idx)
         result = await manager.send_contact_telemetry(contact)
         if result in ("timeout", "not connected") or result.startswith("error"):
-            self._log(f"telemetry: {markup_escape(result)}", "red")
+            self._log(f"telemetry: {markup_escape(result)}", "red", idx=contact_idx)
         else:
-            self._log(f"telemetry: {markup_escape(result)}", "yellow")
+            self._log(f"telemetry: {markup_escape(result)}", "yellow", idx=contact_idx)
 
     def receive_contact_message(
         self, pubkey_prefix: str, sender: str, text: str, timestamp: int
     ) -> None:
-        """Show an incoming DM in the output log (called by MeshCoreApp)."""
-        self._log(f"[bold]{markup_escape(sender)}:[/bold] {markup_escape(text)}", "green")
+        """Show an incoming DM in the contact's log (called by MeshCoreApp)."""
+        contact_idx = next(
+            (i for i, c in enumerate(self._repeaters) if c.get("public_key", "").startswith(pubkey_prefix)),
+            None,
+        )
+        self._log(f"[bold]{markup_escape(sender)}:[/bold] {markup_escape(text)}", "green", idx=contact_idx)
+
+    def receive_login_changed(self, pubkey_prefix: str, success: bool) -> None:
+        """Update per-contact login state and refresh the Login button."""
+        contact_idx = next(
+            (i for i, c in enumerate(self._repeaters) if c.get("public_key", "").startswith(pubkey_prefix)),
+            None,
+        )
+        if contact_idx is not None:
+            self._login_state[contact_idx] = success
+            style = "green" if success else "red"
+            label = "login OK" if success else "login failed"
+            self._log(label, style, idx=contact_idx)
+            if contact_idx == self._selected_idx:
+                self._update_login_button()
 
     @work(thread=False, exclusive=False)
-    async def _run_status(self, contact: dict) -> None:
+    async def _run_status(self, contact: dict, contact_idx: int | None) -> None:
         manager: CompanionManager | None = getattr(self.app, "companion", None)
         if not manager:
-            self._log("Companion not connected", "red")
+            self._log("Companion not connected", "red", idx=contact_idx)
             return
-        self._log(f"status → {self._contact_name(contact)} …", "dim")
+        self._log("status …", "dim", idx=contact_idx)
         result = await manager.send_repeater_status(contact)
         if result in ("timeout", "not connected") or result.startswith("error"):
-            self._log(f"status: {markup_escape(result)}", "red")
+            self._log(f"status: {markup_escape(result)}", "red", idx=contact_idx)
         else:
-            self._log(f"status: {markup_escape(result)}", "yellow")
+            self._log(f"status: {markup_escape(result)}", "yellow", idx=contact_idx)
 
-    def _run_login(self, contact: dict, pwd: str | None) -> None:
+    def _run_login(self, contact: dict, contact_idx: int | None, pwd: str | None) -> None:
         if not pwd:
             return
-        self._do_login(contact, pwd)
+        self._do_login(contact, contact_idx, pwd)
 
     @work(thread=False, exclusive=False)
-    async def _do_login(self, contact: dict, pwd: str) -> None:
+    async def _do_login(self, contact: dict, contact_idx: int | None, pwd: str) -> None:
         manager: CompanionManager | None = getattr(self.app, "companion", None)
         if not manager:
-            self._log("Companion not connected", "red")
+            self._log("Companion not connected", "red", idx=contact_idx)
             return
-        self._log(f"login → {self._contact_name(contact)} …", "dim")
+        self._log("login …", "dim", idx=contact_idx)
         result = await manager.send_repeater_login(contact, pwd)
         if result.startswith("error"):
-            self._log(f"login: {markup_escape(result)}", "red")
+            self._log(f"login: {markup_escape(result)}", "red", idx=contact_idx)
         else:
-            self._log(f"login: {markup_escape(result)}", "yellow")
+            self._log(f"login: {markup_escape(result)}", "yellow", idx=contact_idx)
 
     @work(thread=False, exclusive=False)
-    async def _do_cmd(self, contact: dict, cmd: str) -> None:
+    async def _do_cmd(self, contact: dict, contact_idx: int | None, cmd: str) -> None:
         manager: CompanionManager | None = getattr(self.app, "companion", None)
         if not manager:
-            self._log("Companion not connected", "red")
+            self._log("Companion not connected", "red", idx=contact_idx)
             return
-        self._log(f"/{markup_escape(cmd)} → {self._contact_name(contact)} …", "cyan")
+        self._log(f"/{markup_escape(cmd)} …", "cyan", idx=contact_idx)
         result = await manager.send_contact_cmd(contact, cmd)
         if result.startswith("error"):
-            self._log(f"cmd: {markup_escape(result)}", "red")
+            self._log(f"cmd: {markup_escape(result)}", "red", idx=contact_idx)
         else:
-            self._log(f"cmd: {markup_escape(result)}", "green")
+            self._log(f"cmd: {markup_escape(result)}", "green", idx=contact_idx)
 
     @work(thread=False, exclusive=False)
-    async def _run_trace(self, contact: dict) -> None:
+    async def _run_trace(self, contact: dict, contact_idx: int | None) -> None:
         manager: CompanionManager | None = getattr(self.app, "companion", None)
         if not manager:
-            self._log("Companion not connected", "red")
+            self._log("Companion not connected", "red", idx=contact_idx)
             return
-        self._log(f"trace → {self._contact_name(contact)} …", "dim")
+        self._log("trace …", "dim", idx=contact_idx)
         result = await manager.send_repeater_trace(contact)
         if result in ("timeout", "not connected") or result.startswith("error"):
-            self._log(f"trace: {markup_escape(result)}", "red")
+            self._log(f"trace: {markup_escape(result)}", "red", idx=contact_idx)
         else:
-            self._log(f"trace: {markup_escape(result)}", "yellow")
+            self._log(f"trace: {markup_escape(result)}", "yellow", idx=contact_idx)
 
-    def _run_reboot(self, contact: dict) -> None:
+    def _run_reboot(self, contact: dict, contact_idx: int | None) -> None:
         from textual.app import ComposeResult as _CR
 
         class _ConfirmReboot(ModalScreen[bool]):
@@ -442,32 +494,33 @@ class RepeatersTab(TabPane):
             def action_cancel(self) -> None:
                 self.dismiss(False)
 
-        self.app.push_screen(_ConfirmReboot(), lambda confirmed: self._do_reboot(contact, confirmed))
+        self.app.push_screen(_ConfirmReboot(), lambda confirmed: self._do_reboot(contact, contact_idx, confirmed))
 
-    def _do_reboot(self, contact: dict, confirmed: bool) -> None:
+    def _do_reboot(self, contact: dict, contact_idx: int | None, confirmed: bool) -> None:
         if not confirmed:
             return
-        self._exec_reboot(contact)
+        self._exec_reboot(contact, contact_idx)
 
     @work(thread=False, exclusive=False)
-    async def _exec_reboot(self, contact: dict) -> None:
+    async def _exec_reboot(self, contact: dict, contact_idx: int | None) -> None:
         manager: CompanionManager | None = getattr(self.app, "companion", None)
         if not manager:
-            self._log("[red]Companion not connected[/red]")
+            self._log("[red]Companion not connected[/red]", idx=contact_idx)
             return
-        self._log(f"reboot → {self._contact_name(contact)} …", "dim")
+        self._log("reboot …", "dim", idx=contact_idx)
         result = await manager.send_repeater_reboot(contact)
         if result.startswith("error"):
-            self._log(f"reboot: {markup_escape(result)}", "red")
+            self._log(f"reboot: {markup_escape(result)}", "red", idx=contact_idx)
         else:
-            self._log(f"reboot: {markup_escape(result)}", "yellow")
+            self._log(f"reboot: {markup_escape(result)}", "yellow", idx=contact_idx)
 
     def clear(self) -> None:
         """Clear log and contact list (called on disconnect)."""
         self._repeaters = []
         self._list_item_map = []
         self._selected_idx = None
-        self._log_lines = []
+        self._contact_logs = {}
+        self._login_state = {}
         self.query_one("#repeater_list", ListView).clear()
         self.query_one("#output_content", Static).update("")
         self._update_cmd_visibility()

@@ -33,6 +33,7 @@ try:
         CompanionConnected,
         CompanionConnectionError,
         CompanionDisconnected,
+        ContactLoginChanged,
         ContactMessage,
         ContactsUpdated,
         _MESHCORE_AVAILABLE as _meshcore_pkg_available,
@@ -242,6 +243,17 @@ class MeshCoreApp(App):
                 sender=message.sender,
                 text=message.text,
                 timestamp=message.timestamp,
+            )
+        except Exception:
+            pass
+
+    def on_contact_login_changed(self, message: "ContactLoginChanged") -> None:
+        if not COMPANION_AVAILABLE:
+            return
+        try:
+            self.query_one(RepeatersTab).receive_login_changed(
+                pubkey_prefix=message.pubkey_prefix,
+                success=message.success,
             )
         except Exception:
             pass
