@@ -272,7 +272,6 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
     ConnectScreen #recent-buttons {
         layout: horizontal;
         height: auto;
-        flex-wrap: wrap;
     }
     ConnectScreen #recent-buttons Button {
         margin-right: 1;
