@@ -35,6 +35,8 @@ def main() -> None:
                            help="polling interval in seconds (default: 5)")
     monitor_p.add_argument("--channels", metavar="FILE", default=None,
                            help="channel keys file for decryption (default: channels.txt if present)")
+    monitor_p.add_argument("--log-file", metavar="FILE", default=None,
+                           help="write logs to FILE in addition to the in-app Logs tab")
 
     args = parser.parse_args()
 
@@ -58,6 +60,14 @@ def main() -> None:
         channels = getattr(args, "channels", None)
         if channels is None and os.path.exists("channels.txt"):
             channels = "channels.txt"
+        log_file = getattr(args, "log_file", None)
+        if log_file:
+            import logging
+            fh = logging.FileHandler(log_file, mode="a")
+            fh.setLevel(logging.DEBUG)
+            fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)-8s %(name)s: %(message)s"))
+            logging.getLogger().addHandler(fh)
+            logging.getLogger().setLevel(logging.DEBUG)
         from meshcore_tools.app import MeshCoreApp
         from meshcore_tools.providers.letsmesh_rest import LetsmeshRestProvider
         MeshCoreApp(

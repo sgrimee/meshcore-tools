@@ -8,7 +8,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import logging
+
 from textual.message import Message
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from textual.app import App
@@ -170,6 +174,7 @@ class CompanionManager:
             )
             return
 
+        logger.info("Connecting companion (%s)", config.type)
         try:
             if config.type == "tcp":
                 self._client = await MeshCore.create_tcp(
@@ -209,7 +214,9 @@ class CompanionManager:
                 )
                 return
         except Exception as exc:
-            self._app.post_message(CompanionConnectionError(reason=_ble_error_message(exc)))
+            reason = _ble_error_message(exc)
+            logger.warning("Companion connection error: %s", reason)
+            self._app.post_message(CompanionConnectionError(reason=reason))
             return
 
         self._connected = True
@@ -217,6 +224,7 @@ class CompanionManager:
         await self._fetch_contacts()
         await self._client.start_auto_message_fetching()
 
+        logger.info("Companion connected")
         # Notify the app — self-info may arrive asynchronously; send a placeholder
         self._app.post_message(CompanionConnected(node_name="companion", node_key=""))
 
@@ -248,6 +256,7 @@ class CompanionManager:
 
         async def _on_disconnected(event) -> None:
             self._connected = False
+            logger.debug("Companion disconnected")
             self._app.post_message(CompanionDisconnected())
 
         client.subscribe(_EventType.CHANNEL_MSG_RECV, _on_channel_msg)

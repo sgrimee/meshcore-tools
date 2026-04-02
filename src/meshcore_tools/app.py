@@ -12,6 +12,7 @@ from textual.widgets import Footer, Header, TabbedContent
 if TYPE_CHECKING:
     from meshcore_tools.providers import PacketProvider
 
+from meshcore_tools.logtab import LogTab, TuiLogHandler
 from meshcore_tools.monitor import MonitorTab
 from meshcore_tools.connection import (
     ConnectScreen,
@@ -46,6 +47,7 @@ class MeshCoreApp(App):
         Binding("f1", "switch_tab('tab_monitor')", "Monitor"),
         Binding("f2", "switch_tab('tab_chat')", "Chat", show=False),
         Binding("f3", "switch_tab('tab_repeaters')", "Repeaters", show=False),
+        Binding("f4", "switch_tab('tab_logs')", "Logs", show=False),
         Binding("C", "connect", "Connect"),
         Binding("q", "quit", "Quit"),
     ]
@@ -85,9 +87,15 @@ class MeshCoreApp(App):
             if COMPANION_AVAILABLE:
                 yield ChatTab()
                 yield RepeatersTab()
+            yield LogTab()
         yield Footer()
 
     def on_mount(self) -> None:
+        import logging
+        log_tab = self.query_one(LogTab)
+        logging.getLogger().addHandler(TuiLogHandler(log_tab))
+        logging.getLogger().setLevel(logging.DEBUG)
+
         self.sub_title = f"region={self._region}  poll={self._poll_interval}s"
         if not COMPANION_AVAILABLE:
             self.sub_title += "  [companion features require: pip install meshcore-tools[companion]]"
