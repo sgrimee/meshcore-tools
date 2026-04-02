@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import platform
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -95,6 +97,46 @@ async def _known_ble_devices() -> list[tuple[str, str]]:
         return result
     except Exception:
         return []
+
+
+async def _scan_ble_subprocess() -> list[tuple[str, str]]:
+    """Run BLE scan in a child process to catch macOS SIGABRT on permission denial.
+
+    Returns [(label, address)] for discovered MeshCore devices.
+    Raises PermissionError when the OS kills the child with SIGABRT/SIGKILL,
+    which on macOS indicates Bluetooth permission has not been granted to the
+    terminal app.
+    """
+    script = (
+        b"import asyncio, json\n"
+        b"from bleak import BleakScanner\n"
+        b"async def _scan():\n"
+        b"    devs = await BleakScanner.discover(timeout=5.0)\n"
+        b"    print(json.dumps([[d.name, d.address] for d in devs\n"
+        b"        if d.name and d.name.startswith('MeshCore')]))\n"
+        b"asyncio.run(_scan())\n"
+    )
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        stdout, _ = await asyncio.wait_for(proc.communicate(input=script), timeout=12.0)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.communicate()
+        raise RuntimeError("BLE scan timed out")
+    if proc.returncode in (-6, -9):  # SIGABRT or SIGKILL — Bluetooth permission denied
+        raise PermissionError(
+            "Bluetooth permission denied — in System Settings → Privacy & Security → "
+            "Bluetooth, enable access for your terminal app, then restart it."
+        )
+    if proc.returncode != 0:
+        raise RuntimeError(f"BLE scan process exited with code {proc.returncode}")
+    data = json.loads(stdout or b"[]")
+    return [(f"{name}  {addr}", addr) for name, addr in data]
 
 
 def _ble_scan_error(exc: Exception) -> str:
@@ -266,14 +308,20 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
                 raise ImportError(
                     "bleak not installed. Run: pip install meshcore-tools[companion]"
                 )
-            devices = await BleakScanner.discover(timeout=5.0)
-            # Build options and keep BLEDevice objects for reliable connect
-            self._ble_devices = {}
-            options = []
-            for d in devices:
-                if d.name and d.name.startswith("MeshCore"):
-                    options.append((f"{d.name}  {d.address}", d.address))
-                    self._ble_devices[d.address] = d
+            if platform.system() == "Darwin":
+                # On macOS, run the scan in a child process so that a SIGABRT
+                # from CoreBluetooth (Bluetooth permission denied) is caught and
+                # turned into a readable error instead of crashing the app.
+                options = await _scan_ble_subprocess()
+            else:
+                devices = await BleakScanner.discover(timeout=5.0)
+                # Build options and keep BLEDevice objects for reliable connect
+                self._ble_devices = {}
+                options = []
+                for d in devices:
+                    if d.name and d.name.startswith("MeshCore"):
+                        options.append((f"{d.name}  {d.address}", d.address))
+                        self._ble_devices[d.address] = d
             # Merge in paired/cached devices from BlueZ that weren't advertising
             known = await _known_ble_devices()
             seen = {addr for _, addr in options}
