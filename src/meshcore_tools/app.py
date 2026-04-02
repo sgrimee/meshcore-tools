@@ -50,8 +50,8 @@ class MeshCoreApp(App):
 
     BINDINGS = [
         Binding("f1", "switch_tab('tab_monitor')", "Monitor", show=False),
-        Binding("f2", "switch_tab('tab_chat')", "Chat", show=False),
-        Binding("f3", "switch_tab('tab_repeaters')", "Repeaters", show=False),
+        Binding("f2", "switch_tab('tab_chat')", "Channels", show=False),
+        Binding("f3", "switch_tab('tab_repeaters')", "Contacts", show=False),
         Binding("l", "toggle_log_panel", "Log Panel"),
         Binding("+", "log_panel_grow", "Log +", show=False),
         Binding("-", "log_panel_shrink", "Log -", show=False),

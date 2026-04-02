@@ -1,4 +1,4 @@
-"""RepeatersTab — companion repeater management widget."""
+"""ContactsTab — companion contact management widget."""
 
 from __future__ import annotations
 
@@ -13,8 +13,21 @@ from textual.containers import Container, Horizontal, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, ListItem, ListView, Static, TabPane
 
+
 if TYPE_CHECKING:
     from meshcore_tools.companion import CompanionManager
+
+# Short badge shown in list next to each contact name
+_TYPE_BADGE: dict[int, str] = {0: "???", 1: "CLI", 2: "REP", 3: "RMS", 4: "SNS"}
+
+# Which command buttons are shown for each contact type
+_TYPE_CMDS: dict[int, list[str]] = {
+    0: [],                                                     # Unknown
+    1: [],                                                     # ChatNode — DM is future work
+    2: ["btn_status", "btn_login", "btn_cmd", "btn_trace", "btn_reboot"],  # Repeater
+    3: ["btn_status", "btn_login", "btn_cmd"],                 # RoomServer
+    4: ["btn_status"],                                         # Sensor
+}
 
 
 class _PasswordScreen(ModalScreen[str | None]):
@@ -78,6 +91,7 @@ class _CmdScreen(ModalScreen[str | None]):
 
 
 _CMD_IDS = ["btn_status", "btn_login", "btn_cmd", "btn_trace", "btn_reboot"]
+# (order matches _TYPE_CMDS lists above)
 
 
 class _CmdButton(Button):
@@ -87,7 +101,7 @@ class _CmdButton(Button):
 
 
 class RepeatersTab(TabPane):
-    """Repeater management: list on left, commands + output log on right."""
+    """Contacts tab: list on left, contextual commands + output log on right."""
 
     BINDINGS = [
         Binding("left", "prev_cmd", "Prev cmd", show=False),
@@ -129,7 +143,7 @@ class RepeatersTab(TabPane):
     """
 
     def __init__(self) -> None:
-        super().__init__("F3 Repeaters", id="tab_repeaters")
+        super().__init__("F3 Contacts", id="tab_repeaters")
         self._repeaters: list[dict] = []
         self._selected_idx: int | None = None
         self._log_lines: list[str] = []
@@ -148,42 +162,80 @@ class RepeatersTab(TabPane):
                 yield Static("", id="output_content", markup=True)
 
     def on_mount(self) -> None:
+        self._update_cmd_visibility()
+
+    def _update_cmd_visibility(self) -> None:
+        """Show/hide command buttons based on the selected contact's type."""
+        contact = self._selected_contact()
+        ctype = contact.get("type", 0) if contact else 0
+        visible = set(_TYPE_CMDS.get(ctype, []))
+        for btn_id in _CMD_IDS:
+            try:
+                self.query_one(f"#{btn_id}", Button).display = btn_id in visible
+            except Exception:
+                pass
+        # Clamp active cmd index to visible buttons
+        visible_ids = _TYPE_CMDS.get(ctype, [])
+        if visible_ids:
+            self._active_cmd_idx = min(self._active_cmd_idx, len(visible_ids) - 1)
         self._highlight_active_cmd()
 
     def _highlight_active_cmd(self) -> None:
-        for i, btn_id in enumerate(_CMD_IDS):
+        contact = self._selected_contact()
+        ctype = contact.get("type", 0) if contact else 0
+        visible_ids = _TYPE_CMDS.get(ctype, [])
+        for i, btn_id in enumerate(visible_ids):
             try:
                 self.query_one(f"#{btn_id}", Button).set_class(i == self._active_cmd_idx, "-active-cmd")
             except Exception:
                 pass
 
     def action_prev_cmd(self) -> None:
-        self._active_cmd_idx = (self._active_cmd_idx - 1) % len(_CMD_IDS)
+        contact = self._selected_contact()
+        ctype = contact.get("type", 0) if contact else 0
+        visible_ids = _TYPE_CMDS.get(ctype, [])
+        if not visible_ids:
+            return
+        self._active_cmd_idx = (self._active_cmd_idx - 1) % len(visible_ids)
         self._highlight_active_cmd()
 
     def action_next_cmd(self) -> None:
-        self._active_cmd_idx = (self._active_cmd_idx + 1) % len(_CMD_IDS)
+        contact = self._selected_contact()
+        ctype = contact.get("type", 0) if contact else 0
+        visible_ids = _TYPE_CMDS.get(ctype, [])
+        if not visible_ids:
+            return
+        self._active_cmd_idx = (self._active_cmd_idx + 1) % len(visible_ids)
         self._highlight_active_cmd()
 
     def action_run_cmd(self) -> None:
+        contact = self._selected_contact()
+        ctype = contact.get("type", 0) if contact else 0
+        visible_ids = _TYPE_CMDS.get(ctype, [])
+        if not visible_ids:
+            return
         try:
-            self.query_one(f"#{_CMD_IDS[self._active_cmd_idx]}", Button).press()
+            self.query_one(f"#{visible_ids[self._active_cmd_idx]}", Button).press()
         except Exception:
             pass
 
     def populate_repeaters(self, contacts: list[dict]) -> None:
         """Called by MeshCoreApp to fill the contact list."""
         self._repeaters = contacts
+        self._selected_idx = 0 if contacts else None
         list_view = self.query_one("#repeater_list", ListView)
         list_view.clear()
         for r in self._repeaters:
+            ctype = r.get("type", 0)
+            badge = _TYPE_BADGE.get(ctype, "???")
             name = r.get("adv_name") or r.get("name") or r.get("public_key", "?")[:8]
-            list_view.append(ListItem(Label(name)))
-        if self._repeaters:
-            self._selected_idx = 0
+            list_view.append(ListItem(Label(f"[{badge}] {name}")))
+        self._update_cmd_visibility()
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
         self._selected_idx = event.list_view.index
+        self._active_cmd_idx = 0
+        self._update_cmd_visibility()
 
     def _selected_contact(self) -> dict | None:
         if self._selected_idx is None or self._selected_idx >= len(self._repeaters):
@@ -199,7 +251,7 @@ class RepeatersTab(TabPane):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         contact = self._selected_contact()
         if contact is None:
-            self._log("[red]No repeater selected[/red]")
+            self._log("[red]No contact selected[/red]")
             return
         if event.button.id == "btn_status":
             self._run_status(contact)
@@ -302,9 +354,10 @@ class RepeatersTab(TabPane):
         self._log(f"reboot: {markup_escape(result)}")
 
     def clear(self) -> None:
-        """Clear log and repeater list (called on disconnect)."""
+        """Clear log and contact list (called on disconnect)."""
         self._repeaters = []
         self._selected_idx = None
         self._log_lines = []
         self.query_one("#repeater_list", ListView).clear()
         self.query_one("#output_content", Static).update("")
+        self._update_cmd_visibility()
