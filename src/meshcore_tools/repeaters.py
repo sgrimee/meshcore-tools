@@ -11,7 +11,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label, ListItem, ListView, Static, TabPane
+from textual.widgets import Button, Input, Label, ListItem, ListView, Static, TabbedContent, TabPane
 
 
 if TYPE_CHECKING:
@@ -131,6 +131,7 @@ class RepeatersTab(TabPane):
         self._selected_idx: int | None = None
         self._log_lines: list[str] = []
         self._active_cmd_idx: int = 0
+        self._tab_active: bool = False
 
     def compose(self) -> ComposeResult:
         yield ListView(id="repeater_list")
@@ -171,9 +172,17 @@ class RepeatersTab(TabPane):
         visible_ids = _TYPE_CMDS.get(ctype, [])
         for i, btn_id in enumerate(visible_ids):
             try:
-                self.query_one(f"#{btn_id}", Button).set_class(i == self._active_cmd_idx, "-active-cmd")
+                self.query_one(f"#{btn_id}", Button).set_class(
+                    self._tab_active and i == self._active_cmd_idx, "-active-cmd"
+                )
             except Exception:
                 pass
+
+    def on_tabbed_content_tab_activated(
+        self, event: "TabbedContent.TabActivated"
+    ) -> None:
+        self._tab_active = event.pane is self
+        self._highlight_active_cmd()
 
     def action_prev_cmd(self) -> None:
         contact = self._selected_contact()
