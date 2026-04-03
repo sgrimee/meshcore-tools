@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-04-03
+
 ### Added
+- Add logging to just monitor
+- Per-contact logs, login state tracking, and improved trace/ping/telemetry
 - Auto-focus most recent device on connection panel open
 - Add DM/ping/telemetry contact ops; fix status/ping response display
 - Display channels as vertical list on left of channels tab
@@ -39,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add companion optional dependency (meshcore>=2.3.3)
 
 ### Changed
+- Regression tests for repeater ping/telemetry/status protocols
 - Add build and clean targets to justfile
 - Exclude dev-only files from sdist
 - Manage version in __version__.py, add CHANGELOG
@@ -54,6 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add companion TUI design spec
 
 ### Fixed
+- Restore working ping/status/telemetry protocols for repeaters
 - Reset to first button when contacts tab gains focus
 - Only show active-cmd button highlight when contacts tab is active
 - Ping filter, telemetry min_timeout, auto-select first list item
@@ -87,4 +93,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ConnectScreen Select allow_blank=False and port validation
 - Correct module docstring (ConnectScreen added in Task 3)
 
-[unreleased]: https://github.com/sgrimee/meshcore-tools/compare/v0.1.0...HEAD
+[unreleased]: https://github.com/sgrimee/meshcore-tools/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/sgrimee/meshcore-tools/compare/v0.1.0...v0.2.0
