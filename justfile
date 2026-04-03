@@ -45,7 +45,7 @@ clear-tile-cache:
 
 # Start live packet monitor TUI
 monitor region="LUX" poll="5":
-    uv run meshcore-tools monitor --region {{ region }} --poll {{ poll }}
+    uv run meshcore-tools monitor --region {{ region }} --poll {{ poll }} --log-file /tmp/mc.log
 
 # Append channels from a meshcore-cli companion to channels.txt (strips numeric prefixes)
 # Usage: just get-channels               (uses first available device)
