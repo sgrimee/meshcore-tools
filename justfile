@@ -6,6 +6,14 @@ default:
 hooks:
     git config core.hooksPath .githooks
 
+# Build sdist and wheel
+build:
+    uv build
+
+# Remove build artifacts
+clean:
+    rm -rf dist/
+
 # Sync dependencies (including optional map extras)
 sync:
     uv sync --all-extras
@@ -21,19 +29,23 @@ test *args:
 
 # Update node database from input files and APIs
 update region="LUX":
-    uv run lma nodes update --region {{ region }}
+    uv run meshcore-tools nodes update --region {{ region }}
 
 # List all nodes
 list:
-    uv run lma nodes list
+    uv run meshcore-tools nodes list
 
 # Look up a node by public key prefix
 lookup prefix:
-    uv run lma nodes lookup {{ prefix }}
+    uv run meshcore-tools nodes lookup {{ prefix }}
+
+# Clear the OSM tile cache
+clear-tile-cache:
+    rm -rf ~/.cache/meshcore-tools/tiles
 
 # Start live packet monitor TUI
 monitor region="LUX" poll="5":
-    uv run lma monitor --region {{ region }} --poll {{ poll }}
+    uv run meshcore-tools monitor --region {{ region }} --poll {{ poll }} --log-file /tmp/mc.log
 
 # Append channels from a meshcore-cli companion to channels.txt (strips numeric prefixes)
 # Usage: just get-channels               (uses first available device)

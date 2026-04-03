@@ -6,10 +6,7 @@ Requires optional dependencies:
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
-import struct
-import termios
 from pathlib import Path
 
 from rich.markup import escape as markup_escape
@@ -25,25 +22,18 @@ from meshcore_tools.decoder import GROUP_TYPES, decode_packet
 
 try:
     from staticmap import CircleMarker, Line, StaticMap
+    from textual_image._terminal import get_cell_size as _get_cell_size
     from textual_image.widget import Image as TileImage
     _HAS_MAP_LIBS = True
 except ImportError:
+    StaticMap = None  # type: ignore
+    CircleMarker = None  # type: ignore
+    Line = None  # type: ignore
+    TileImage = None  # type: ignore
+    _get_cell_size = None  # type: ignore
     _HAS_MAP_LIBS = False
 
 _TILE_CACHE = Path.home() / ".cache" / "lma" / "tiles"
-
-
-def _cell_px_size() -> tuple[int, int]:
-    """Return (cell_width_px, cell_height_px) by querying the terminal via TIOCGWINSZ."""
-    try:
-        buf = struct.pack("4H", 0, 0, 0, 0)
-        result = fcntl.ioctl(1, termios.TIOCGWINSZ, buf)
-        rows, cols, xpix, ypix = struct.unpack("4H", result)
-        if cols > 0 and rows > 0 and xpix > 0 and ypix > 0:
-            return xpix // cols, ypix // rows
-    except Exception:
-        pass
-    return 14, 28  # typical monospace cell fallback
 
 _ROLE_PRIORITY = {"source": 0, "observer": 1, "relay": 2, "dest": 3}
 _ROLE_COLORS = {
@@ -155,19 +145,22 @@ def collect_map_nodes(
     return placed, unplaced, path_coords
 
 
-class _CachedStaticMap(StaticMap):
-    """StaticMap that caches downloaded tiles to ~/.cache/meshcore_tools/tiles/."""
+if _HAS_MAP_LIBS:
+    class _CachedStaticMap(StaticMap):
+        """StaticMap that caches downloaded tiles to ~/.cache/meshcore_tools/tiles/."""
 
-    def get(self, url, **kwargs):
-        _TILE_CACHE.mkdir(parents=True, exist_ok=True)
-        key = hashlib.sha1(url.encode()).hexdigest()
-        path = _TILE_CACHE / key
-        if path.exists():
-            return 200, path.read_bytes()
-        status, content = super().get(url, **kwargs)
-        if status == 200:
-            path.write_bytes(content)
-        return status, content
+        def get(self, url, **kwargs):
+            _TILE_CACHE.mkdir(parents=True, exist_ok=True)
+            key = hashlib.sha1(url.encode()).hexdigest()
+            path = _TILE_CACHE / key
+            if path.exists():
+                return 200, path.read_bytes()
+            status, content = super().get(url, **kwargs)
+            if status == 200:
+                path.write_bytes(content)
+            return status, content
+else:
+    _CachedStaticMap = None
 
 
 def _boxes_overlap(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
@@ -271,6 +264,7 @@ def _render_tile_map(
         ImageFont.load_default(size=38),
     )
 
+    assert _CachedStaticMap is not None  # only reachable when _HAS_MAP_LIBS is True
     m = _CachedStaticMap(width_px, height_px)
 
     # Path line: dark outline + white core, drawn before markers so markers sit on top
@@ -406,7 +400,8 @@ class MapSidePanel(Vertical):
         w_cells: int,
         h_cells: int,
     ) -> None:
-        cw, ch = _cell_px_size()
+        cell = _get_cell_size()
+        cw, ch = cell.width, cell.height
         width_px = max(w_cells * cw, 400)
         height_px = max(h_cells * ch, 300)
         try:
@@ -537,7 +532,8 @@ class PacketMapScreen(ModalScreen):
         w_cells: int,
         h_cells: int,
     ) -> None:
-        cw, ch = _cell_px_size()
+        cell = _get_cell_size()
+        cw, ch = cell.width, cell.height
         width_px = max(w_cells * cw, 400)
         height_px = max(h_cells * ch, 300)
         try:
