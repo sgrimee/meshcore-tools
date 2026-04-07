@@ -248,10 +248,10 @@ class MeshCoreApp(App):
             tabbed = self.query_one(TabbedContent)
             chat_unread = self.query_one(ChatTab).unread_count()
             chat_tab = tabbed.get_tab("tab_chat")
-            chat_tab.label = "F2 Channels ●" if chat_unread else "F2 Channels"
+            chat_tab.label = "F2 Channels [#ffa62b]●[/]" if chat_unread else "F2 Channels"
             rep_unread = self.query_one(RepeatersTab).unread_count()
             rep_tab = tabbed.get_tab("tab_repeaters")
-            rep_tab.label = "F3 Contacts ●" if rep_unread else "F3 Contacts"
+            rep_tab.label = "F3 Contacts [#ffa62b]●[/]" if rep_unread else "F3 Contacts"
         except Exception:
             pass
 
