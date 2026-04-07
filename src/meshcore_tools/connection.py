@@ -36,7 +36,8 @@ class ConnectionConfig:
     host: str | None = None
     port: int | None = None
     device: str | None = None
-    ble_name: str | None = None
+    ble_name: str | None = None  # human-readable device name (e.g. "MeshCore-ABC")
+    ble_address: str | None = None  # MAC / UUID address used for connecting
     ble_pin: str | None = None
     # Not serialized — holds a freshly scanned BLEDevice for reliable connect.
     ble_device: object | None = None
@@ -54,6 +55,7 @@ def load_connection_config(config_dir: Path = _DEFAULT_CONFIG_DIR) -> Connection
         port=data.get("port"),
         device=data.get("device"),
         ble_name=data.get("ble_name"),
+        ble_address=data.get("ble_address"),
         ble_pin=data.get("ble_pin"),
     )
 
@@ -73,7 +75,10 @@ _HISTORY_MAX = 5
 
 
 def _config_key(c: ConnectionConfig) -> tuple[str, str | None, int | None, str | None, str | None]:
-    return (c.type, c.host, c.port, c.device, c.ble_name)
+    # Use ble_address for BLE deduplication; fall back to ble_name for legacy entries
+    # that stored the MAC address there before ble_address was introduced.
+    ble_id = c.ble_address or c.ble_name
+    return (c.type, c.host, c.port, c.device, ble_id)
 
 
 def save_connection_history(
@@ -105,6 +110,7 @@ def load_connection_history(config_dir: Path = _DEFAULT_CONFIG_DIR) -> list[Conn
                 port=e.get("port"),
                 device=e.get("device"),
                 ble_name=e.get("ble_name"),
+                ble_address=e.get("ble_address"),
                 ble_pin=e.get("ble_pin"),
             )
             for e in entries
@@ -283,6 +289,7 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
         super().__init__()
         self._current = current or ConnectionConfig(type="tcp")
         self._ble_devices: dict[str, object] = {}  # address → BLEDevice
+        self._ble_name_map: dict[str, str] = {}  # address → human-readable name
 
     def compose(self) -> ComposeResult:
         with Container():
@@ -433,6 +440,11 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
             seen = {addr for _, addr in options}
             options += [entry for entry in known if entry[1] not in seen]
             if options:
+                # Build address → name map from option labels ("Name  address" format)
+                for label, addr in options:
+                    name_part = label.replace(f"  {addr}", "").strip()
+                    if name_part:
+                        self._ble_name_map[addr] = name_part
                 ble_sel.set_options(options)
                 ble_sel.value = options[0][1]
                 ble_sel.display = True
@@ -495,7 +507,8 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
             pin = self.query_one("#ble_pin", Input).value.strip() or None
             config = ConnectionConfig(
                 type="ble",
-                ble_name=addr,
+                ble_name=self._ble_name_map.get(addr, addr),
+                ble_address=addr,
                 ble_pin=pin,
                 ble_device=self._ble_devices.get(addr),
             )
