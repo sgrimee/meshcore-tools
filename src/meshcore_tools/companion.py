@@ -137,11 +137,13 @@ def _extract_channel_key_hex(payload: dict) -> str:
     Tries the field names used by known meshcore firmware versions.
     Returns a 32-char lowercase hex string, or '' if no key material is found.
     """
-    for field in ("key", "aes_key", "channel_key", "secret"):
+    for field in ("key", "aes_key", "channel_key", "secret", "channel_secret"):
         raw = payload.get(field)
         if raw is None:
             continue
         if isinstance(raw, (bytes, bytearray)) and len(raw) == 16:
+            if not any(raw):  # all-zero = unconfigured slot
+                continue
             return raw.hex()
         if isinstance(raw, str) and len(raw) == 32:
             try:

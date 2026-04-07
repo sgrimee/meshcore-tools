@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import os
 import stat
 
-import pytest
 
 from meshcore_tools.passwords import (
     get_prefilled_password,

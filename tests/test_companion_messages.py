@@ -7,6 +7,7 @@ from meshcore_tools.companion import (
     CompanionDisconnected,
     ContactMessage,
     ContactsUpdated,
+    _extract_channel_key_hex,
 )
 
 
@@ -59,3 +60,30 @@ def test_contacts_updated_stores_list():
     msg = ContactsUpdated(contacts=contacts)
     assert len(msg.contacts) == 1
     assert msg.contacts[0]["name"] == "relay1"
+
+
+# ---------------------------------------------------------------------------
+# _extract_channel_key_hex
+# ---------------------------------------------------------------------------
+
+KEY = bytes.fromhex("52d21b5e68a130279cce6b64c0f8bcd4")
+
+
+def test_extract_channel_secret_bytes():
+    assert _extract_channel_key_hex({"channel_secret": KEY}) == KEY.hex()
+
+
+def test_extract_legacy_key_field():
+    assert _extract_channel_key_hex({"key": KEY}) == KEY.hex()
+
+
+def test_extract_all_zero_key_skipped():
+    assert _extract_channel_key_hex({"channel_secret": bytes(16)}) == ""
+
+
+def test_extract_missing_field_returns_empty():
+    assert _extract_channel_key_hex({"channel_idx": 0, "channel_name": "X"}) == ""
+
+
+def test_extract_hex_string_field():
+    assert _extract_channel_key_hex({"secret": KEY.hex()}) == KEY.hex()
