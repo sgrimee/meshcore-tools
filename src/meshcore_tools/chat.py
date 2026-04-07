@@ -61,6 +61,10 @@ class ChatTab(TabPane):
         padding: 0 1;
         color: $text-muted;
     }
+    ChatTab #channel_list ListItem.has-unread Label {
+        text-style: bold;
+        color: $warning;
+    }
     """
 
     def __init__(self) -> None:
@@ -68,6 +72,7 @@ class ChatTab(TabPane):
         self._channels: list[dict] = []
         self._active_channel_idx: int = 0
         self._messages: dict[int, list[dict]] = {}
+        self._unread: dict[int, int] = {}  # channel_idx → unread count
 
     def compose(self) -> ComposeResult:
         yield ListView(id="channel_list")
@@ -138,9 +143,37 @@ class ChatTab(TabPane):
         self.query_one("#msg_content", Static).update("\n".join(lines))
         self.query_one("#msg_log", VerticalScroll).scroll_end(animate=False)
 
+    def _channel_label(self, ch: dict) -> str:
+        """Return the display label for a channel, including unread count if any."""
+        count = self._unread.get(ch["idx"], 0)
+        if count:
+            return f"{ch['name']}  [{count}]"
+        return ch["name"]
+
+    def _refresh_channel_item(self, channel_idx: int) -> None:
+        """Update a single channel list item's label and CSS class."""
+        idxs = [ch["idx"] for ch in self._channels]
+        if channel_idx not in idxs:
+            return
+        pos = idxs.index(channel_idx)
+        ch = self._channels[pos]
+        list_view = self.query_one("#channel_list", ListView)
+        items = list(list_view.query(ListItem))
+        if pos < len(items):
+            items[pos].query_one(Label).update(self._channel_label(ch))
+            if self._unread.get(channel_idx, 0) > 0:
+                items[pos].add_class("has-unread")
+            else:
+                items[pos].remove_class("has-unread")
+
+    def unread_count(self) -> int:
+        """Total unread messages across all channels."""
+        return sum(self._unread.values())
+
     def populate_channels(self, channels: list[dict]) -> None:
         """Called by MeshCoreApp after channels are fetched from the device."""
         self._channels = channels
+        self._unread.clear()
         list_view = self.query_one("#channel_list", ListView)
         list_view.clear()
         for ch in self._channels:
@@ -155,15 +188,27 @@ class ChatTab(TabPane):
             return
         idx = event.list_view.index
         if idx is not None and idx < len(self._channels):
-            self._active_channel_idx = self._channels[idx]["idx"]
+            channel_idx = self._channels[idx]["idx"]
+            had_unread = channel_idx in self._unread
+            self._unread.pop(channel_idx, None)
+            if had_unread:
+                self._refresh_channel_item(channel_idx)
+                getattr(self.app, "_update_tab_labels", lambda: None)()
+            self._active_channel_idx = channel_idx
             self._refresh_log()
 
     def _select_channel(self, channel_idx: int) -> None:
+        had_unread = channel_idx in self._unread
+        self._unread.pop(channel_idx, None)
         self._active_channel_idx = channel_idx
         idxs = [ch["idx"] for ch in self._channels]
         if channel_idx in idxs:
             list_view = self.query_one("#channel_list", ListView)
             list_view.index = idxs.index(channel_idx)
+            if had_unread:
+                self._refresh_channel_item(channel_idx)
+        if had_unread:
+            getattr(self.app, "_update_tab_labels", lambda: None)()
         self._refresh_log()
 
     def action_prev_channel(self) -> None:
@@ -197,10 +242,14 @@ class ChatTab(TabPane):
         })
         if channel_idx == self._active_channel_idx:
             self._refresh_log()
+        else:
+            self._unread[channel_idx] = self._unread.get(channel_idx, 0) + 1
+            self._refresh_channel_item(channel_idx)
 
     def clear(self) -> None:
         """Clear all messages and channels (called on disconnect)."""
         self._messages.clear()
+        self._unread.clear()
         self._active_channel_idx = 0
         self._refresh_log()
         self.populate_channels([])

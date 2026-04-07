@@ -182,6 +182,10 @@ class RepeatersTab(TabPane):
         text-style: bold;
         border-top: solid $panel-lighten-1;
     }
+    RepeatersTab #repeater_list ListItem.has-unread Label {
+        text-style: bold;
+        color: $warning;
+    }
     RepeatersTab #right_pane {
         width: 1fr;
         height: 1fr;
@@ -219,6 +223,7 @@ class RepeatersTab(TabPane):
         self._active_cmd_idx: int = 0
         self._tab_active: bool = False
         self._login_state: dict[int, bool] = {}  # contact index → logged in
+        self._unread: dict[int, int] = {}  # contact index → unread count
 
     def compose(self) -> ComposeResult:
         yield ListView(id="repeater_list")
@@ -325,6 +330,35 @@ class RepeatersTab(TabPane):
         except Exception:
             pass
 
+    def _find_list_pos(self, contact_idx: int) -> int | None:
+        """Find the list view position for a given contact index (skipping header rows)."""
+        for pos, idx in enumerate(self._list_item_map):
+            if idx == contact_idx:
+                return pos
+        return None
+
+    def _refresh_contact_item(self, contact_idx: int) -> None:
+        """Update a single contact list item's label and CSS class."""
+        pos = self._find_list_pos(contact_idx)
+        if pos is None or contact_idx >= len(self._repeaters):
+            return
+        contact = self._repeaters[contact_idx]
+        name = contact.get("adv_name") or contact.get("name") or contact.get("public_key", "?")[:8]
+        count = self._unread.get(contact_idx, 0)
+        label_text = f"  {name}" + (f"  [{count}]" if count else "")
+        list_view = self.query_one("#repeater_list", ListView)
+        items = list(list_view.query(ListItem))
+        if pos < len(items):
+            items[pos].query_one(Label).update(label_text)
+            if count > 0:
+                items[pos].add_class("has-unread")
+            else:
+                items[pos].remove_class("has-unread")
+
+    def unread_count(self) -> int:
+        """Total unread messages across all contacts."""
+        return sum(self._unread.values())
+
     # Display order for contact type groups
     _TYPE_ORDER = [1, 2, 3, 4, 0]
     _TYPE_LABEL = {0: "Unknown", 1: "CLI", 2: "Repeaters", 3: "Room Servers", 4: "Sensors"}
@@ -334,6 +368,7 @@ class RepeatersTab(TabPane):
         self._repeaters = contacts
         self._list_item_map = []
         self._selected_idx = None
+        self._unread.clear()
         list_view = self.query_one("#repeater_list", ListView)
         list_view.clear()
 
@@ -375,6 +410,11 @@ class RepeatersTab(TabPane):
         contact_idx = self._list_item_map[pos]
         if contact_idx is None:
             return  # header row — keep current selection
+        had_unread = contact_idx in self._unread
+        self._unread.pop(contact_idx, None)
+        if had_unread:
+            self._refresh_contact_item(contact_idx)
+            getattr(self.app, "_update_tab_labels", lambda: None)()
         self._selected_idx = contact_idx
         self._active_cmd_idx = 0
         self._update_cmd_visibility()
@@ -491,6 +531,9 @@ class RepeatersTab(TabPane):
             None,
         )
         self._log(f"[bold]{markup_escape(sender)}:[/bold] {markup_escape(text)}", "green", idx=contact_idx)
+        if contact_idx is not None and contact_idx != self._selected_idx:
+            self._unread[contact_idx] = self._unread.get(contact_idx, 0) + 1
+            self._refresh_contact_item(contact_idx)
 
     def receive_login_changed(self, pubkey_prefix: str, success: bool) -> None:
         """Update per-contact login state and refresh the Login button."""
@@ -640,6 +683,7 @@ class RepeatersTab(TabPane):
         self._selected_idx = None
         self._contact_logs = {}
         self._login_state = {}
+        self._unread.clear()
         self.query_one("#repeater_list", ListView).clear()
         self.query_one("#output_content", Static).update("")
         self._update_cmd_visibility()

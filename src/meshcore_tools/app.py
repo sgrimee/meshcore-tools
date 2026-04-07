@@ -240,6 +240,21 @@ class MeshCoreApp(App):
             except Exception as exc:
                 _log.warning("Failed to persist channels: %s", exc)
 
+    def _update_tab_labels(self) -> None:
+        """Update F2/F3 tab labels to reflect current unread counts."""
+        if not COMPANION_AVAILABLE:
+            return
+        try:
+            tabbed = self.query_one(TabbedContent)
+            chat_unread = self.query_one(ChatTab).unread_count()
+            chat_tab = tabbed.get_tab("tab_chat")
+            chat_tab.label = "F2 Channels ●" if chat_unread else "F2 Channels"
+            rep_unread = self.query_one(RepeatersTab).unread_count()
+            rep_tab = tabbed.get_tab("tab_repeaters")
+            rep_tab.label = "F3 Contacts ●" if rep_unread else "F3 Contacts"
+        except Exception:
+            pass
+
     def on_channel_message(self, message: "ChannelMessage") -> None:
         if not COMPANION_AVAILABLE:
             return
@@ -253,6 +268,7 @@ class MeshCoreApp(App):
             )
         except Exception:
             pass
+        self._update_tab_labels()
 
     def on_contact_message(self, message: "ContactMessage") -> None:
         if not COMPANION_AVAILABLE:
@@ -266,6 +282,7 @@ class MeshCoreApp(App):
             )
         except Exception:
             pass
+        self._update_tab_labels()
 
     def on_contact_login_changed(self, message: "ContactLoginChanged") -> None:
         if not COMPANION_AVAILABLE:
