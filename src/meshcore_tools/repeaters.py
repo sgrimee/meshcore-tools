@@ -35,11 +35,15 @@ class _PasswordScreen(ModalScreen[str | None]):
 
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
+    def __init__(self, prefilled: str = "") -> None:
+        super().__init__()
+        self._prefilled = prefilled
+
     def compose(self) -> ComposeResult:
         with Container():
             yield Static("[bold]Repeater login[/bold]", markup=True)
             yield Label("Password:")
-            yield Input(password=True, id="pwd")
+            yield Input(value=self._prefilled, password=True, id="pwd")
             with Horizontal():
                 yield Button("Login", variant="primary", id="btn_ok")
                 yield Button("Cancel", id="btn_cancel")
@@ -58,6 +62,52 @@ class _PasswordScreen(ModalScreen[str | None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+class _SavePasswordScreen(ModalScreen[bool]):
+    """Ask user whether to save the repeater password after a successful login."""
+
+    BINDINGS = [Binding("escape", "cancel", "No")]
+
+    DEFAULT_CSS = """
+    _SavePasswordScreen {
+        align: center middle;
+    }
+    _SavePasswordScreen > Container {
+        width: 52;
+        height: auto;
+        border: solid $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    _SavePasswordScreen Static {
+        margin-bottom: 1;
+    }
+    _SavePasswordScreen Horizontal {
+        height: 3;
+    }
+    _SavePasswordScreen Button {
+        margin-right: 1;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Container():
+            yield Static("[bold]Save password?[/bold]", markup=True)
+            yield Static(
+                "Store this password for future logins?\n"
+                "[dim]Saved in plaintext in ~/.config/meshcore-tools/passwords.toml[/dim]",
+                markup=True,
+            )
+            with Horizontal():
+                yield Button("Save", variant="primary", id="btn_yes")
+                yield Button("No", id="btn_no")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "btn_yes")
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
 
 
 _CMD_IDS = ["btn_ping", "btn_status", "btn_telemetry", "btn_login", "btn_trace", "btn_reboot"]
@@ -346,7 +396,12 @@ class RepeatersTab(TabPane):
         elif event.button.id == "btn_telemetry":
             self._run_telemetry(contact, contact_idx)
         elif event.button.id == "btn_login":
-            self.app.push_screen(_PasswordScreen(), lambda pwd: self._run_login(contact, contact_idx, pwd))
+            from meshcore_tools.passwords import get_prefilled_password
+            prefilled = get_prefilled_password(contact) or ""
+            self.app.push_screen(
+                _PasswordScreen(prefilled),
+                lambda pwd: self._run_login(contact, contact_idx, pwd),
+            )
         elif event.button.id == "btn_trace":
             self._run_trace(contact, contact_idx)
         elif event.button.id == "btn_reboot":
@@ -445,6 +500,34 @@ class RepeatersTab(TabPane):
             self._log(f"login: {markup_escape(result)}", "red", idx=contact_idx)
         else:
             self._log(f"login: {markup_escape(result)}", "yellow", idx=contact_idx)
+            self._offer_save_password(contact, contact_idx, pwd)
+
+    def _offer_save_password(
+        self, contact: dict, contact_idx: int | None, pwd: str
+    ) -> None:
+        """Show save-password dialog if the password differs from what is stored."""
+        from meshcore_tools.passwords import get_prefilled_password
+        if get_prefilled_password(contact) == pwd:
+            return  # already saved — nothing to do
+        node_key = contact.get("public_key", "")
+        if not node_key:
+            return  # no stable key to index by
+
+        def _on_save(save: bool) -> None:
+            if not save:
+                return
+            from meshcore_tools.passwords import save_repeater_password
+            try:
+                save_repeater_password(node_key, pwd)
+                self._log("password saved", "dim", idx=contact_idx)
+            except Exception as exc:
+                self._log(
+                    f"save password failed: {markup_escape(str(exc))}",
+                    "red",
+                    idx=contact_idx,
+                )
+
+        self.app.push_screen(_SavePasswordScreen(), _on_save)
 
     @work(thread=False, exclusive=False)
     async def _do_cmd(self, contact: dict, contact_idx: int | None, cmd: str) -> None:
