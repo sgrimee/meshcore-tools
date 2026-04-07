@@ -560,3 +560,25 @@ class CompanionManager:
             return str(result)
         except Exception as exc:
             return f"error: {exc}"
+
+    async def set_channel(
+        self, channel_idx: int, channel_name: str, channel_secret: bytes
+    ) -> str:
+        """Write a channel slot on the companion. Returns 'ok' on success."""
+        if not self._client or not self._connected:
+            return "not connected"
+        try:
+            result = await self._client.commands.set_channel(
+                channel_idx, channel_name, channel_secret
+            )
+            if str(getattr(result, "type", "")) == str(_EventType.ERROR):
+                return f"error: {result.payload}"
+            return "ok"
+        except Exception as exc:
+            return f"error: {exc}"
+
+    async def fetch_channels(self) -> None:
+        """Re-fetch channels from the companion and post ChannelsUpdated."""
+        if not self._client or not self._connected:
+            return
+        await self._fetch_channels()
