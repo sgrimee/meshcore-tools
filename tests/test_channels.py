@@ -328,9 +328,9 @@ def test_persist_new_channels_index_continues_after_existing(tmp_path):
     path = _write_tmp(tmp_path, f"0: Public [8b3387e9c5cdea6ac9e5edbaa115cd72]\n")
     new_ch = [{"idx": 1, "name": "#wardriving", "key_hex": _WARDRIVING_KEY}]
     persist_new_channels(path, new_ch)
-    lines = [l for l in (tmp_path / "channels.txt").read_text().splitlines() if l.strip()]
+    lines = [line for line in (tmp_path / "channels.txt").read_text().splitlines() if line.strip()]
     # New entry should start at index 1
-    assert any(l.startswith("1:") for l in lines)
+    assert any(line.startswith("1:") for line in lines)
 
 
 def test_persist_new_channels_reloadable(tmp_path):

@@ -46,3 +46,17 @@ Dependency: `textual>=0.80` (TUI framework). Optional: `meshcore>=2.3.3` (compan
 }
 ```
 `source` is either a filename from `input/` or `"api:REGION"`. `last_seen` is only present for API-sourced nodes.
+
+## Development workflow
+
+**Before declaring any task done, always run:**
+```
+just check   # ruff lint + ty type-check
+just test    # pytest
+```
+
+Both must pass with no errors. Fix any issues before finishing.
+
+**Git hooks** (activated once with `just hooks` after cloning):
+- `pre-commit` → `just check`
+- `pre-push` → `just test`
