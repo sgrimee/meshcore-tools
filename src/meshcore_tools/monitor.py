@@ -517,6 +517,7 @@ class PacketMonitorApp(App):
         self.region = region
         self.poll_interval = poll_interval
         self._packet_provider = packet_provider
+        self._channels_path = channels_path
         channels = load_channels(channels_path) if channels_path else []
         self._channel_lookup = build_channel_lookup(channels)
         self._db: dict = {"nodes": {}}
@@ -565,6 +566,11 @@ class PacketMonitorApp(App):
         self.sub_title = f"region={self.region}  poll={self.poll_interval}s"
         self._set_status(None)
         self._poll_worker()
+
+    def reload_channels(self) -> None:
+        """Reload channel lookup from the channels file (called after new entries are appended)."""
+        channels = load_channels(self._channels_path) if self._channels_path else []
+        self._channel_lookup = build_channel_lookup(channels)
 
     @work(thread=True, exclusive=True)
     def _poll_worker(self) -> None:
@@ -946,6 +952,7 @@ class MonitorTab(TabPane):
         self._region = region
         self.poll_interval = poll_interval
         self._packet_provider = packet_provider
+        self._channels_path = channels_path
         channels = load_channels(channels_path) if channels_path else []
         self._channel_lookup = build_channel_lookup(channels)
         self._db: dict = {"nodes": {}}
@@ -991,6 +998,11 @@ class MonitorTab(TabPane):
         table.cursor_type = "row"
         self._set_status(None)
         self._poll_worker()
+
+    def reload_channels(self) -> None:
+        """Reload channel lookup from the channels file (called after new entries are appended)."""
+        channels = load_channels(self._channels_path) if self._channels_path else []
+        self._channel_lookup = build_channel_lookup(channels)
 
     @work(thread=True, exclusive=True)
     def _poll_worker(self) -> None:

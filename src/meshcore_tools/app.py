@@ -219,6 +219,26 @@ class MeshCoreApp(App):
             self.query_one(ChatTab).populate_channels(message.channels)
         except Exception:
             pass
+        if self._channels_path:
+            from meshcore_tools.channels import persist_new_channels
+            import logging as _logging
+            _log = _logging.getLogger(__name__)
+            try:
+                newly_added = persist_new_channels(self._channels_path, message.channels)
+                if newly_added:
+                    names = ", ".join(name for name, _ in newly_added)
+                    _log.info(
+                        "Persisted %d new channel(s) to %s: %s",
+                        len(newly_added),
+                        self._channels_path,
+                        names,
+                    )
+                    try:
+                        self.query_one(MonitorTab).reload_channels()
+                    except Exception:
+                        pass
+            except Exception as exc:
+                _log.warning("Failed to persist channels: %s", exc)
 
     def on_channel_message(self, message: "ChannelMessage") -> None:
         if not COMPANION_AVAILABLE:

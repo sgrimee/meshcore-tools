@@ -95,6 +95,66 @@ def load_channels(path: str) -> list[tuple[str, bytes]]:
     return channels
 
 
+def persist_new_channels(path: str, new_channels: list[dict]) -> list[tuple[str, bytes]]:
+    """Append channel entries from *new_channels* that are not already in *path*.
+
+    Each item in *new_channels* is a dict with at least ``name`` (str) and
+    optionally ``key_hex`` (32-char hex string representing the 16-byte AES key).
+    Entries without ``key_hex`` are skipped — they cannot be used for decryption.
+
+    Only appends entries whose name or key are not already present in the file.
+    Returns a list of newly appended ``(name, key_bytes)`` pairs (empty if none added).
+    """
+    existing = load_channels(path)
+    existing_names = {label.lower() for label, _ in existing}
+    existing_keys = {key for _, key in existing}
+
+    to_append: list[tuple[str, bytes]] = []
+    for ch in new_channels:
+        key_hex = ch.get("key_hex") or ""
+        if not key_hex or len(key_hex) != 32:
+            continue
+        try:
+            key_bytes = bytes.fromhex(key_hex)
+        except ValueError:
+            continue
+        name = ch.get("name") or ""
+        if not name:
+            continue
+        if name.lower() in existing_names or key_bytes in existing_keys:
+            continue
+        to_append.append((name, key_bytes))
+        existing_names.add(name.lower())
+        existing_keys.add(key_bytes)
+
+    if to_append:
+        # Determine the next index to use for new entries
+        existing_indexed = _count_indexed_entries(path)
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                for offset, (name, key_bytes) in enumerate(to_append):
+                    idx = existing_indexed + offset
+                    f.write(f"{idx}: {name} [{key_bytes.hex()}]\n")
+        except OSError as exc:
+            import sys
+            print(f"Warning: could not write to {path!r}: {exc}", file=sys.stderr)
+
+    return to_append
+
+
+def _count_indexed_entries(path: str) -> int:
+    """Count how many 'N: Name [hex]' lines exist in *path* to determine next index."""
+    count = 0
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                if _GET_CHANNELS_RE.match(line.strip()):
+                    count += 1
+    except OSError:
+        pass
+    return count
+
+
 def build_channel_lookup(
     channels: list[tuple[str, bytes]],
 ) -> dict[int, list[tuple[str, bytes]]]:
