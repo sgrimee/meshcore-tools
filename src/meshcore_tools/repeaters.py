@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
@@ -16,6 +17,18 @@ from textual.widgets import Button, Input, Label, ListItem, ListView, Static, Ta
 
 if TYPE_CHECKING:
     from meshcore_tools.companion import CompanionManager
+
+
+def _format_response(result: str) -> str:
+    """If result is a JSON object, return key: value lines; otherwise return as-is."""
+    try:
+        data = json.loads(result)
+    except (json.JSONDecodeError, ValueError):
+        return result
+    if not isinstance(data, dict):
+        return result
+    return "\n".join(f"{k}: {v}" for k, v in data.items())
+
 
 # Short badge shown in list next to each contact name
 _TYPE_BADGE: dict[int, str] = {0: "???", 1: "CLI", 2: "REP", 3: "RMS", 4: "SNS"}
@@ -444,7 +457,7 @@ class RepeatersTab(TabPane):
         if result in ("timeout", "not connected") or result.startswith("error"):
             self._log(f"telemetry: {markup_escape(result)}", "red", idx=contact_idx)
         else:
-            self._log(f"telemetry: {markup_escape(result)}", "yellow", idx=contact_idx)
+            self._log(f"telemetry:\n{markup_escape(_format_response(result))}", "yellow", idx=contact_idx)
 
     def receive_contact_message(
         self, pubkey_prefix: str, sender: str, text: str, timestamp: int
@@ -481,7 +494,7 @@ class RepeatersTab(TabPane):
         if result in ("timeout", "not connected") or result.startswith("error"):
             self._log(f"status: {markup_escape(result)}", "red", idx=contact_idx)
         else:
-            self._log(f"status: {markup_escape(result)}", "yellow", idx=contact_idx)
+            self._log(f"status:\n{markup_escape(_format_response(result))}", "yellow", idx=contact_idx)
 
     def _run_login(self, contact: dict, contact_idx: int | None, pwd: str | None) -> None:
         if not pwd:
@@ -540,7 +553,7 @@ class RepeatersTab(TabPane):
         if result.startswith("error"):
             self._log(f"cmd: {markup_escape(result)}", "red", idx=contact_idx)
         else:
-            self._log(f"cmd: {markup_escape(result)}", "green", idx=contact_idx)
+            self._log(f"cmd:\n{markup_escape(_format_response(result))}", "green", idx=contact_idx)
 
     @work(thread=False, exclusive=False)
     async def _run_trace(self, contact: dict, contact_idx: int | None) -> None:
@@ -553,7 +566,7 @@ class RepeatersTab(TabPane):
         if result in ("timeout", "not connected") or result.startswith("error"):
             self._log(f"trace: {markup_escape(result)}", "red", idx=contact_idx)
         else:
-            self._log(f"trace: {markup_escape(result)}", "yellow", idx=contact_idx)
+            self._log(f"trace:\n{markup_escape(_format_response(result))}", "yellow", idx=contact_idx)
 
     def _run_reboot(self, contact: dict, contact_idx: int | None) -> None:
         from textual.app import ComposeResult as _CR
