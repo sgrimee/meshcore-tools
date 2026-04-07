@@ -526,7 +526,7 @@ class RepeatersTab(TabPane):
         if not node_key:
             return  # no stable key to index by
 
-        def _on_save(save: bool) -> None:
+        def _on_save(save: bool | None) -> None:
             if not save:
                 return
             from meshcore_tools.passwords import save_repeater_password
