@@ -34,10 +34,11 @@ except ImportError:
 class CompanionConnected(Message):
     """Posted when the companion device connects and sends self-info."""
 
-    def __init__(self, node_name: str, node_key: str) -> None:
+    def __init__(self, node_name: str, node_key: str, self_info: dict | None = None) -> None:
         super().__init__()
         self.node_name = node_name
         self.node_key = node_key
+        self.self_info: dict = self_info or {}
 
 
 class CompanionDisconnected(Message):
@@ -269,7 +270,9 @@ class CompanionManager:
         self_info = self._client.self_info or {}
         node_name = self_info.get("name", "companion")
         node_key = self_info.get("public_key", "")
-        self._app.post_message(CompanionConnected(node_name=node_name, node_key=node_key))
+        self._app.post_message(
+            CompanionConnected(node_name=node_name, node_key=node_key, self_info=self_info)
+        )
 
     def _subscribe_events(self) -> None:
         client = self._client
@@ -558,6 +561,30 @@ class CompanionManager:
             if result is None:
                 return "timeout"
             return str(result)
+        except Exception as exc:
+            return f"error: {exc}"
+
+    def get_self_info(self) -> dict:
+        """Return the current self_info dict from the connected device (no network round-trip)."""
+        if not self._client or not self._connected:
+            return {}
+        return dict(self._client.self_info or {})
+
+    async def send_self_cmd(self, cmd: str) -> str:
+        """Send a command to the companion device itself. Returns the response text."""
+        if not self._client or not self._connected:
+            return "not connected"
+        self_info = self._client.self_info or {}
+        node_key = self_info.get("public_key", "")
+        if not node_key:
+            return "error: companion public key unknown"
+        # Build a minimal contact dict targeting the companion itself
+        self_contact = {"public_key": node_key, "type": 2}
+        try:
+            result = await self._client.commands.send_cmd(dst=self_contact, cmd=cmd)
+            if str(getattr(result, "type", "")) == str(_EventType.ERROR):
+                return f"error: {result.payload}"
+            return "sent"
         except Exception as exc:
             return f"error: {exc}"
 
