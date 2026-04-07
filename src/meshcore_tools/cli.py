@@ -6,6 +6,16 @@ import os
 from meshcore_tools.providers.letsmesh_rest import DEFAULT_REGION
 
 
+def _resolve_region(explicit: str | None) -> str:
+    """Return the region to use, saving it to config when explicitly provided."""
+    from meshcore_tools.config import get_region, save_region
+    if explicit is not None:
+        save_region(explicit)
+        return explicit
+    saved = get_region()
+    return saved if saved is not None else DEFAULT_REGION
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="meshcore-tools",
@@ -20,7 +30,7 @@ def main() -> None:
     nodes_sub.required = True
 
     update_p = nodes_sub.add_parser("update", help="update database from input files and API")
-    update_p.add_argument("--region", default=DEFAULT_REGION, metavar="REGION")
+    update_p.add_argument("--region", default=None, metavar="REGION")
 
     lookup_p = nodes_sub.add_parser("lookup", help="find node(s) by public key prefix")
     lookup_p.add_argument("prefix", metavar="HEX_PREFIX")
@@ -30,7 +40,7 @@ def main() -> None:
 
     # --- monitor subcommand (alias for default TUI) ---
     monitor_p = sub.add_parser("monitor", help="live packet monitoring TUI (default)")
-    monitor_p.add_argument("--region", default=DEFAULT_REGION, metavar="REGION")
+    monitor_p.add_argument("--region", default=None, metavar="REGION")
     monitor_p.add_argument("--poll", type=int, default=5, metavar="SECONDS",
                            help="polling interval in seconds (default: 5)")
     monitor_p.add_argument("--channels", metavar="FILE", default=None,
@@ -45,7 +55,7 @@ def main() -> None:
             from meshcore_tools.db import update
             from meshcore_tools.providers.letsmesh_rest import LetsmeshRestProvider
             from meshcore_tools.providers.meshcore_rest import MeshcoreRestProvider
-            update(args.region, node_provider=LetsmeshRestProvider(), coord_provider=MeshcoreRestProvider())
+            update(_resolve_region(args.region), node_provider=LetsmeshRestProvider(), coord_provider=MeshcoreRestProvider())
         elif args.nodes_command == "lookup":
             from meshcore_tools.nodes import lookup
             lookup(args.prefix)
@@ -55,7 +65,7 @@ def main() -> None:
 
     else:
         # Default (no subcommand) and "monitor" both launch MeshCoreApp
-        region = getattr(args, "region", DEFAULT_REGION)
+        region = _resolve_region(getattr(args, "region", None))
         poll = getattr(args, "poll", 5)
         channels = getattr(args, "channels", None)
         if channels is None and os.path.exists("channels.txt"):
