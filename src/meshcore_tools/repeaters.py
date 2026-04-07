@@ -299,6 +299,10 @@ class RepeatersTab(TabPane):
         self._tab_active = event.pane is self
         if self._tab_active:
             self._active_cmd_idx = 0
+            if self._selected_idx is not None and self._selected_idx in self._unread:
+                del self._unread[self._selected_idx]
+                self._refresh_contact_item(self._selected_idx)
+                getattr(self.app, "_update_tab_labels", lambda: None)()
         self._highlight_active_cmd()
 
     def action_prev_cmd(self) -> None:
@@ -531,7 +535,7 @@ class RepeatersTab(TabPane):
             None,
         )
         self._log(f"[bold]{markup_escape(sender)}:[/bold] {markup_escape(text)}", "green", idx=contact_idx)
-        if contact_idx is not None and contact_idx != self._selected_idx:
+        if contact_idx is not None and (contact_idx != self._selected_idx or not self._tab_active):
             self._unread[contact_idx] = self._unread.get(contact_idx, 0) + 1
             self._refresh_contact_item(contact_idx)
 
