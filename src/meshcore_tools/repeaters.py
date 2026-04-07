@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import ast
 import json
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from rich.markup import escape as markup_escape
 from textual import work
@@ -20,14 +21,36 @@ if TYPE_CHECKING:
 
 
 def _format_response(result: str) -> str:
-    """If result is a JSON object, return key: value lines; otherwise return as-is."""
+    """If result is a dict (JSON or Python repr), return Rich-markup key: value lines; otherwise escape and return as-is."""
+    data = None
     try:
         data = json.loads(result)
     except (json.JSONDecodeError, ValueError):
-        return result
-    if not isinstance(data, dict):
-        return result
-    return "\n".join(f"{k}: {v}" for k, v in data.items())
+        pass
+    if data is None:
+        try:
+            data = ast.literal_eval(result)
+        except (ValueError, SyntaxError):
+            pass
+    def _fmt_dict(d: dict) -> str:
+        width = max((len(str(k)) for k in d), default=0)
+        return "\n".join(
+            f"  [dim]{markup_escape(str(k)).ljust(width)} :[/dim] {markup_escape(str(v))}"
+            for k, v in d.items()
+        )
+
+    def _fmt_dict_inline(d: dict, idx: int) -> str:
+        pairs = "[dim] · [/dim]".join(
+            f"[dim]{markup_escape(str(k))}:[/dim] {markup_escape(str(v))}"
+            for k, v in d.items()
+        )
+        return f"  [dim][{idx}][/dim] {pairs}"
+
+    if isinstance(data, dict):
+        return _fmt_dict(data)
+    if isinstance(data, list) and all(isinstance(item, dict) for item in data):
+        return "\n".join(_fmt_dict_inline(cast(dict, item), i + 1) for i, item in enumerate(data))
+    return markup_escape(result)
 
 
 # Short badge shown in list next to each contact name
@@ -444,7 +467,7 @@ class RepeatersTab(TabPane):
         if result in ("timeout", "not connected") or result.startswith("error"):
             self._log(f"ping: {markup_escape(result)}", "red", idx=contact_idx)
         else:
-            self._log(f"ping: {markup_escape(result)}", "yellow", idx=contact_idx)
+            self._log(f"[bold]ping:[/bold]\n{_format_response(result)}", "yellow", idx=contact_idx)
 
     @work(thread=False, exclusive=False)
     async def _run_telemetry(self, contact: dict, contact_idx: int | None) -> None:
@@ -457,7 +480,7 @@ class RepeatersTab(TabPane):
         if result in ("timeout", "not connected") or result.startswith("error"):
             self._log(f"telemetry: {markup_escape(result)}", "red", idx=contact_idx)
         else:
-            self._log(f"telemetry:\n{markup_escape(_format_response(result))}", "yellow", idx=contact_idx)
+            self._log(f"[bold]telemetry:[/bold]\n{_format_response(result)}", "yellow", idx=contact_idx)
 
     def receive_contact_message(
         self, pubkey_prefix: str, sender: str, text: str, timestamp: int
@@ -494,7 +517,7 @@ class RepeatersTab(TabPane):
         if result in ("timeout", "not connected") or result.startswith("error"):
             self._log(f"status: {markup_escape(result)}", "red", idx=contact_idx)
         else:
-            self._log(f"status:\n{markup_escape(_format_response(result))}", "yellow", idx=contact_idx)
+            self._log(f"[bold]status:[/bold]\n{_format_response(result)}", "yellow", idx=contact_idx)
 
     def _run_login(self, contact: dict, contact_idx: int | None, pwd: str | None) -> None:
         if not pwd:
@@ -553,7 +576,7 @@ class RepeatersTab(TabPane):
         if result.startswith("error"):
             self._log(f"cmd: {markup_escape(result)}", "red", idx=contact_idx)
         else:
-            self._log(f"cmd:\n{markup_escape(_format_response(result))}", "green", idx=contact_idx)
+            self._log(f"[bold]cmd:[/bold]\n{_format_response(result)}", "green", idx=contact_idx)
 
     @work(thread=False, exclusive=False)
     async def _run_trace(self, contact: dict, contact_idx: int | None) -> None:
@@ -566,7 +589,7 @@ class RepeatersTab(TabPane):
         if result in ("timeout", "not connected") or result.startswith("error"):
             self._log(f"trace: {markup_escape(result)}", "red", idx=contact_idx)
         else:
-            self._log(f"trace:\n{markup_escape(_format_response(result))}", "yellow", idx=contact_idx)
+            self._log(f"[bold]trace:[/bold]\n{_format_response(result)}", "yellow", idx=contact_idx)
 
     def _run_reboot(self, contact: dict, contact_idx: int | None) -> None:
         from textual.app import ComposeResult as _CR
