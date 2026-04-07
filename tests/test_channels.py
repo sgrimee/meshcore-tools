@@ -14,6 +14,7 @@ from meshcore_tools.channels import (
     PUBLIC_CHANNEL_KEY,
     build_channel_lookup,
     load_channels,
+    persist_new_channels,
     try_decrypt,
     _channel_hash_byte,
     _derive_hashtag_key,
@@ -258,3 +259,100 @@ def test_try_decrypt_unknown_channel_returns_none():
     ciphertext = payload[3:]
     result = try_decrypt(ch_byte, mac, ciphertext, lookup={})
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# persist_new_channels
+# ---------------------------------------------------------------------------
+
+_WARDRIVING_KEY = "e3c26491e9cd321e3a6be50d57d54acf"
+_CHAOS_KEY = "b53025e867806e0b5e241adc0d47358b"
+
+
+def test_persist_new_channels_appends_new_entry(tmp_path):
+    path = str(tmp_path / "channels.txt")
+    new_ch = [{"idx": 0, "name": "#wardriving", "key_hex": _WARDRIVING_KEY}]
+    added = persist_new_channels(path, new_ch)
+    assert len(added) == 1
+    assert added[0] == ("#wardriving", bytes.fromhex(_WARDRIVING_KEY))
+    content = (tmp_path / "channels.txt").read_text()
+    assert f"#wardriving [{_WARDRIVING_KEY}]" in content
+
+
+def test_persist_new_channels_no_duplicate_by_name(tmp_path):
+    path = _write_tmp(tmp_path, f"0: #wardriving [{_WARDRIVING_KEY}]\n")
+    new_ch = [{"idx": 0, "name": "#wardriving", "key_hex": _WARDRIVING_KEY}]
+    added = persist_new_channels(path, new_ch)
+    assert added == []
+
+
+def test_persist_new_channels_no_duplicate_by_key(tmp_path):
+    path = _write_tmp(tmp_path, f"0: MyChannel [{_WARDRIVING_KEY}]\n")
+    new_ch = [{"idx": 0, "name": "#wardriving", "key_hex": _WARDRIVING_KEY}]
+    added = persist_new_channels(path, new_ch)
+    assert added == []
+
+
+def test_persist_new_channels_skips_missing_key(tmp_path):
+    path = str(tmp_path / "channels.txt")
+    new_ch = [{"idx": 0, "name": "NoKey"}]
+    added = persist_new_channels(path, new_ch)
+    assert added == []
+    assert not (tmp_path / "channels.txt").exists()
+
+
+def test_persist_new_channels_file_created_when_missing(tmp_path):
+    path = str(tmp_path / "newdir" / "channels.txt")
+    (tmp_path / "newdir").mkdir()
+    new_ch = [{"idx": 0, "name": "#wardriving", "key_hex": _WARDRIVING_KEY}]
+    added = persist_new_channels(path, new_ch)
+    assert len(added) == 1
+    content = (tmp_path / "newdir" / "channels.txt").read_text()
+    assert _WARDRIVING_KEY in content
+
+
+def test_persist_new_channels_appends_multiple(tmp_path):
+    path = str(tmp_path / "channels.txt")
+    new_ch = [
+        {"idx": 0, "name": "#wardriving", "key_hex": _WARDRIVING_KEY},
+        {"idx": 1, "name": "#chaosstuff", "key_hex": _CHAOS_KEY},
+    ]
+    added = persist_new_channels(path, new_ch)
+    assert len(added) == 2
+    content = (tmp_path / "channels.txt").read_text()
+    assert _WARDRIVING_KEY in content
+    assert _CHAOS_KEY in content
+
+
+def test_persist_new_channels_index_continues_after_existing(tmp_path):
+    path = _write_tmp(tmp_path, f"0: Public [8b3387e9c5cdea6ac9e5edbaa115cd72]\n")
+    new_ch = [{"idx": 1, "name": "#wardriving", "key_hex": _WARDRIVING_KEY}]
+    persist_new_channels(path, new_ch)
+    lines = [l for l in (tmp_path / "channels.txt").read_text().splitlines() if l.strip()]
+    # New entry should start at index 1
+    assert any(l.startswith("1:") for l in lines)
+
+
+def test_persist_new_channels_reloadable(tmp_path):
+    path = str(tmp_path / "channels.txt")
+    new_ch = [{"idx": 0, "name": "#wardriving", "key_hex": _WARDRIVING_KEY}]
+    persist_new_channels(path, new_ch)
+    reloaded = load_channels(path)
+    assert len(reloaded) == 1
+    assert reloaded[0] == ("#wardriving", bytes.fromhex(_WARDRIVING_KEY))
+
+
+def test_persist_new_channels_invalid_key_hex_skipped(tmp_path):
+    path = str(tmp_path / "channels.txt")
+    new_ch = [{"idx": 0, "name": "#bad", "key_hex": "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"}]
+    added = persist_new_channels(path, new_ch)
+    assert added == []
+
+
+def test_persist_new_channels_key_as_bytes(tmp_path):
+    """key_hex must be a hex string; bytes values in the dict are handled by companion."""
+    path = str(tmp_path / "channels.txt")
+    # key_hex should be a string — bytes value is not accepted by persist_new_channels
+    new_ch = [{"idx": 0, "name": "#wardriving", "key_hex": None}]
+    added = persist_new_channels(path, new_ch)
+    assert added == []

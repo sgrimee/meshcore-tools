@@ -131,6 +131,27 @@ def _ble_error_message(exc: Exception) -> str:
     return msg
 
 
+def _extract_channel_key_hex(payload: dict) -> str:
+    """Extract a 16-byte AES key from a get_channel payload dict.
+
+    Tries the field names used by known meshcore firmware versions.
+    Returns a 32-char lowercase hex string, or '' if no key material is found.
+    """
+    for field in ("key", "aes_key", "channel_key", "secret"):
+        raw = payload.get(field)
+        if raw is None:
+            continue
+        if isinstance(raw, (bytes, bytearray)) and len(raw) == 16:
+            return raw.hex()
+        if isinstance(raw, str) and len(raw) == 32:
+            try:
+                bytes.fromhex(raw)  # validate
+                return raw.lower()
+            except ValueError:
+                pass
+    return ""
+
+
 async def _ble_flush_stale(address: str) -> None:
     """Connect to a BLE device and disconnect immediately.
 
@@ -318,10 +339,15 @@ class CompanionManager:
             if result is None or str(result.type) == str(_EventType.ERROR):
                 break
             payload = result.payload
+            logger.debug("get_channel(%d) payload: %s", idx, payload)
             name = payload.get("channel_name", "").rstrip("\x00").strip()
             if not name:
                 name = f"#{idx}"
-            channels.append({"idx": idx, "name": name})
+            key_hex = _extract_channel_key_hex(payload)
+            ch: dict = {"idx": idx, "name": name}
+            if key_hex:
+                ch["key_hex"] = key_hex
+            channels.append(ch)
         if not channels:
             channels = [{"idx": 0, "name": "#public"}]
         self._app.post_message(ChannelsUpdated(channels=channels))
