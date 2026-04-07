@@ -224,7 +224,7 @@ class CompanionManager:
             elif config.type == "serial":
                 self._client = await MeshCore.create_serial(config.device or "")
             elif config.type == "ble":
-                ble_addr = config.ble_name or ""
+                ble_addr = config.ble_address or config.ble_name or ""
                 # Use a freshly scanned BLEDevice when available (set by
                 # ConnectScreen after a manual scan) — this is more reliable
                 # than connecting by MAC address alone, because BlueZ may not
