@@ -12,7 +12,7 @@ from pathlib import Path
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label, LoadingIndicator, Select, Static
+from textual.widgets import Button, Collapsible, Input, Label, LoadingIndicator, Select, Static
 from textual.containers import Container
 from textual import work
 
@@ -265,17 +265,15 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
     }
     ConnectScreen #recent-section {
         margin-bottom: 1;
-    }
-    ConnectScreen #recent-section Label {
-        margin-top: 0;
+        height: auto;
     }
     ConnectScreen #recent-buttons {
-        layout: horizontal;
+        layout: vertical;
         height: auto;
     }
     ConnectScreen #recent-buttons Button {
-        margin-right: 1;
         margin-bottom: 1;
+        width: 100%;
     }
     """
 
@@ -289,8 +287,7 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
     def compose(self) -> ComposeResult:
         with Container():
             yield Static("[bold]Connect to companion device[/bold]", markup=True)
-            with Container(id="recent-section"):
-                yield Label("Recent:")
+            with Collapsible(title="Recent connections", id="recent-section", collapsed=False):
                 with Container(id="recent-buttons"):
                     pass  # populated in on_mount
             yield Label("Connection type:")
