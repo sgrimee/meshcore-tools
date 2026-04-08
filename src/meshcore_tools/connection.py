@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import platform
 import re
 import sys
@@ -25,8 +26,13 @@ try:
 except ImportError:
     _BLEAK_AVAILABLE = False
 
+from meshcore_tools.config import load_config, save_config
 
-_DEFAULT_CONFIG_DIR = Path.home() / ".config" / "meshcore-tools"
+
+def _default_config_dir() -> Path:
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".config"
+    return base / "meshcore-tools"
 
 
 @dataclass
@@ -44,58 +50,7 @@ class ConnectionConfig:
     ble_device: object | None = None
 
 
-def load_connection_config(config_dir: Path = _DEFAULT_CONFIG_DIR) -> ConnectionConfig | None:
-    """Return stored config or None if the file does not exist."""
-    path = config_dir / "connection.json"
-    if not path.exists():
-        return None
-    data = json.loads(path.read_text())
-    return ConnectionConfig(
-        type=data.get("type", "tcp"),
-        host=data.get("host"),
-        port=data.get("port"),
-        device=data.get("device"),
-        ble_name=data.get("ble_name"),
-        ble_address=data.get("ble_address"),
-        ble_pin=data.get("ble_pin"),
-    )
-
-
-def save_connection_config(
-    config: ConnectionConfig, config_dir: Path = _DEFAULT_CONFIG_DIR
-) -> None:
-    """Persist config as JSON, creating parent directories as needed."""
-    config_dir.mkdir(parents=True, exist_ok=True)
-    path = config_dir / "connection.json"
-    data = {k: v for k, v in asdict(config).items() if v is not None and k != "ble_device"}
-    path.write_text(json.dumps(data, indent=2))
-    save_connection_history(config, config_dir)
-
-
 _HISTORY_MAX = 5
-
-
-def _config_key(c: ConnectionConfig) -> tuple[str, str | None, int | None, str | None, str | None]:
-    # Use ble_address for BLE deduplication; fall back to ble_name for legacy entries
-    # that stored the MAC address there before ble_address was introduced.
-    ble_id = c.ble_address or c.ble_name
-    return (c.type, c.host, c.port, c.device, ble_id)
-
-
-def save_connection_history(
-    config: ConnectionConfig, config_dir: Path = _DEFAULT_CONFIG_DIR
-) -> None:
-    """Prepend config to the recent-connections list, deduplicating by identity."""
-    existing = load_connection_history(config_dir)
-    deduped = [h for h in existing if _config_key(h) != _config_key(config)]
-    history = ([config] + deduped)[:_HISTORY_MAX]
-    config_dir.mkdir(parents=True, exist_ok=True)
-    data = [
-        {k: v for k, v in asdict(h).items() if v is not None and k != "ble_device"}
-        for h in history
-    ]
-    (config_dir / "history.json").write_text(json.dumps(data, indent=2))
-
 
 _BLE_ADDR_RE = re.compile(
     r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$"  # Linux MAC
@@ -118,28 +73,142 @@ def _migrate_ble_entry(c: ConnectionConfig) -> ConnectionConfig:
     return c
 
 
-def load_connection_history(config_dir: Path = _DEFAULT_CONFIG_DIR) -> list[ConnectionConfig]:
-    """Return recent connections, most recent first. Returns [] on any error."""
-    path = config_dir / "history.json"
-    if not path.exists():
-        return []
-    try:
-        entries = json.loads(path.read_text())
-        return [
-            _migrate_ble_entry(
-                ConnectionConfig(
-                    type=e.get("type", "tcp"),
-                    host=e.get("host"),
-                    port=e.get("port"),
-                    device=e.get("device"),
-                    ble_name=e.get("ble_name"),
-                    ble_address=e.get("ble_address"),
-                    ble_pin=e.get("ble_pin"),
-                )
+def _config_key(c: ConnectionConfig) -> tuple[str, str | None, int | None, str | None, str | None]:
+    # Use ble_address for BLE deduplication; fall back to ble_name for legacy entries
+    # that stored the MAC address there before ble_address was introduced.
+    ble_id = c.ble_address or c.ble_name
+    return (c.type, c.host, c.port, c.device, ble_id)
+
+
+def _raw_to_configs(entries: list) -> list[ConnectionConfig]:
+    """Convert a list of raw dicts (from config.toml) to ConnectionConfig objects."""
+    return [
+        _migrate_ble_entry(
+            ConnectionConfig(
+                type=e.get("type", "tcp"),
+                host=e.get("host"),
+                port=e.get("port"),
+                device=e.get("device"),
+                ble_name=e.get("ble_name"),
+                ble_address=e.get("ble_address"),
+                ble_pin=e.get("ble_pin"),
             )
-            for e in entries
-            if isinstance(e, dict)
-        ]
+        )
+        for e in entries
+        if isinstance(e, dict)
+    ]
+
+
+def _migrate_connection_files(config_dir: Path, cfg: dict) -> dict:
+    """One-time migration: read connection.json + history.json into cfg and save."""
+    changed = False
+    conn_path = config_dir / "connection.json"
+    if conn_path.exists():
+        try:
+            data = json.loads(conn_path.read_text())
+            cfg["connection"] = {k: v for k, v in data.items() if k != "ble_device"}
+            changed = True
+        except Exception:
+            pass
+    hist_path = config_dir / "history.json"
+    if hist_path.exists():
+        try:
+            entries = json.loads(hist_path.read_text())
+            history = [
+                {k: v for k, v in e.items() if k != "ble_device"}
+                for e in entries
+                if isinstance(e, dict)
+            ]
+            cfg.setdefault("connection", {})["history"] = history
+            changed = True
+        except Exception:
+            pass
+    if changed:
+        save_config(cfg, config_dir)
+    return cfg
+
+
+def _load_config_with_migration(config_dir: Path) -> dict:
+    """Load config.toml and migrate old JSON files if the connection section is absent."""
+    cfg = load_config(config_dir)
+    if "connection" not in cfg:
+        cfg = _migrate_connection_files(config_dir, cfg)
+    return cfg
+
+
+def load_connection_config(config_dir: Path | None = None) -> ConnectionConfig | None:
+    """Return stored connection config or None if absent."""
+    if config_dir is None:
+        config_dir = _default_config_dir()
+    cfg = _load_config_with_migration(config_dir)
+    conn = cfg.get("connection")
+    if conn is None:
+        return None
+    return _migrate_ble_entry(
+        ConnectionConfig(
+            type=conn.get("type", "tcp"),
+            host=conn.get("host"),
+            port=conn.get("port"),
+            device=conn.get("device"),
+            ble_name=conn.get("ble_name"),
+            ble_address=conn.get("ble_address"),
+            ble_pin=conn.get("ble_pin"),
+        )
+    )
+
+
+def save_connection_config(
+    config: ConnectionConfig, config_dir: Path | None = None
+) -> None:
+    """Persist connection config and prepend to history in config.toml."""
+    if config_dir is None:
+        config_dir = _default_config_dir()
+    config_dir.mkdir(parents=True, exist_ok=True)
+    cfg = _load_config_with_migration(config_dir)
+    conn_dict = {k: v for k, v in asdict(config).items() if v is not None and k != "ble_device"}
+    # Preserve and update history
+    existing = _raw_to_configs(cfg.get("connection", {}).get("history", []))
+    deduped = [h for h in existing if _config_key(h) != _config_key(config)]
+    new_history = ([config] + deduped)[:_HISTORY_MAX]
+    history_raw = [
+        {k: v for k, v in asdict(h).items() if v is not None and k != "ble_device"}
+        for h in new_history
+    ]
+    if history_raw:
+        conn_dict["history"] = history_raw
+    cfg["connection"] = conn_dict
+    save_config(cfg, config_dir)
+
+
+def save_connection_history(
+    config: ConnectionConfig, config_dir: Path | None = None
+) -> None:
+    """Prepend config to the recent-connections list, deduplicating by identity."""
+    if config_dir is None:
+        config_dir = _default_config_dir()
+    cfg = load_config(config_dir)
+    existing = _raw_to_configs(cfg.get("connection", {}).get("history", []))
+    deduped = [h for h in existing if _config_key(h) != _config_key(config)]
+    new_history = ([config] + deduped)[:_HISTORY_MAX]
+    history_raw = [
+        {k: v for k, v in asdict(h).items() if v is not None and k != "ble_device"}
+        for h in new_history
+    ]
+    cfg.setdefault("connection", {})
+    if history_raw:
+        cfg["connection"]["history"] = history_raw
+    else:
+        cfg["connection"].pop("history", None)
+    save_config(cfg, config_dir)
+
+
+def load_connection_history(config_dir: Path | None = None) -> list[ConnectionConfig]:
+    """Return recent connections, most recent first. Returns [] on any error."""
+    if config_dir is None:
+        config_dir = _default_config_dir()
+    try:
+        cfg = _load_config_with_migration(config_dir)
+        return _raw_to_configs(cfg.get("connection", {}).get("history", []))
     except Exception:
         return []
 

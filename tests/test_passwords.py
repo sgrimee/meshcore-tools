@@ -15,7 +15,7 @@ from meshcore_tools.passwords import (
 
 
 # ---------------------------------------------------------------------------
-# default password (settings.toml)
+# default password (secrets.toml)
 # ---------------------------------------------------------------------------
 
 
@@ -30,24 +30,23 @@ def test_save_and_load_default_password(tmp_path):
 
 def test_save_default_password_creates_file(tmp_path):
     save_default_password("pw", config_dir=tmp_path)
-    assert (tmp_path / "settings.toml").exists()
+    assert (tmp_path / "secrets.toml").exists()
 
 
 def test_save_default_password_600_permissions(tmp_path):
     save_default_password("pw", config_dir=tmp_path)
-    mode = (tmp_path / "settings.toml").stat().st_mode
+    mode = (tmp_path / "secrets.toml").stat().st_mode
     assert stat.S_IMODE(mode) == 0o600
 
 
-def test_save_default_password_preserves_other_keys(tmp_path):
-    # Write a settings.toml with an extra key before saving default_password
-    (tmp_path / "settings.toml").write_text('other_key = "value"\n')
-    (tmp_path / "settings.toml").chmod(0o600)
-    save_default_password("pw", config_dir=tmp_path)
+def test_save_default_password_preserves_repeater_passwords(tmp_path):
+    # Write a repeater password first, then save default_password — both should coexist.
+    save_repeater_password("key1", "pw1", config_dir=tmp_path)
+    save_default_password("default", config_dir=tmp_path)
     import tomllib
-    data = tomllib.loads((tmp_path / "settings.toml").read_text())
-    assert data["default_password"] == "pw"
-    assert data["other_key"] == "value"
+    data = tomllib.loads((tmp_path / "secrets.toml").read_text())
+    assert data["default_password"] == "default"
+    assert data["passwords"]["key1"] == "pw1"
 
 
 def test_save_default_password_overwrites_existing(tmp_path):
@@ -57,12 +56,12 @@ def test_save_default_password_overwrites_existing(tmp_path):
 
 
 def test_load_default_password_invalid_toml(tmp_path):
-    (tmp_path / "settings.toml").write_text("not valid toml ][")
+    (tmp_path / "secrets.toml").write_text("not valid toml ][")
     assert load_default_password(config_dir=tmp_path) is None
 
 
 def test_load_default_password_empty_field(tmp_path):
-    (tmp_path / "settings.toml").write_text('default_password = ""\n')
+    (tmp_path / "secrets.toml").write_text('default_password = ""\n')
     assert load_default_password(config_dir=tmp_path) is None
 
 
@@ -73,7 +72,7 @@ def test_save_default_password_special_chars(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# per-repeater passwords (passwords.toml)
+# per-repeater passwords (secrets.toml [passwords] table)
 # ---------------------------------------------------------------------------
 
 
@@ -89,12 +88,12 @@ def test_save_and_load_repeater_password(tmp_path):
 
 def test_save_repeater_password_creates_file(tmp_path):
     save_repeater_password("key1", "pw", config_dir=tmp_path)
-    assert (tmp_path / "passwords.toml").exists()
+    assert (tmp_path / "secrets.toml").exists()
 
 
 def test_save_repeater_password_600_permissions(tmp_path):
     save_repeater_password("key1", "pw", config_dir=tmp_path)
-    mode = (tmp_path / "passwords.toml").stat().st_mode
+    mode = (tmp_path / "secrets.toml").stat().st_mode
     assert stat.S_IMODE(mode) == 0o600
 
 
@@ -120,8 +119,30 @@ def test_save_repeater_password_special_chars(tmp_path):
 
 
 def test_load_repeater_passwords_invalid_toml(tmp_path):
-    (tmp_path / "passwords.toml").write_text("not valid ][")
+    (tmp_path / "secrets.toml").write_text("not valid ][")
     assert load_repeater_passwords(config_dir=tmp_path) == {}
+
+
+# ---------------------------------------------------------------------------
+# default and repeater passwords coexist in secrets.toml
+# ---------------------------------------------------------------------------
+
+
+def test_default_and_repeater_coexist(tmp_path):
+    save_default_password("default_pw", config_dir=tmp_path)
+    save_repeater_password("key1", "specific_pw", config_dir=tmp_path)
+    assert load_default_password(config_dir=tmp_path) == "default_pw"
+    assert load_repeater_passwords(config_dir=tmp_path)["key1"] == "specific_pw"
+
+
+def test_single_file_always_600(tmp_path):
+    """Both default and repeater passwords go to secrets.toml, always with 600 perms."""
+    save_default_password("pw", config_dir=tmp_path)
+    save_repeater_password("k", "p", config_dir=tmp_path)
+    mode = (tmp_path / "secrets.toml").stat().st_mode
+    assert stat.S_IMODE(mode) == 0o600
+    assert not (tmp_path / "passwords.toml").exists()
+    assert not (tmp_path / "settings.toml").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -166,11 +187,39 @@ def test_get_prefilled_empty_public_key_uses_default(tmp_path):
     assert get_prefilled_password(contact, config_dir=tmp_path) == "default_pw"
 
 
-def test_save_default_password_with_corrupt_existing_settings(tmp_path):
-    """save_default_password should succeed even if existing settings.toml is invalid TOML."""
-    settings = tmp_path / "settings.toml"
-    settings.write_text("not valid toml ][")
-    settings.chmod(0o600)
+def test_save_default_password_with_corrupt_existing_secrets(tmp_path):
+    """save_default_password should succeed even if existing secrets.toml is invalid TOML."""
+    secrets = tmp_path / "secrets.toml"
+    secrets.write_text("not valid toml ][")
+    secrets.chmod(0o600)
     # Should not raise
     save_default_password("newpass", config_dir=tmp_path)
     assert load_default_password(config_dir=tmp_path) == "newpass"
+
+
+# ---------------------------------------------------------------------------
+# Migration from old files (settings.toml + passwords.toml → secrets.toml)
+# ---------------------------------------------------------------------------
+
+
+def test_migrate_default_password_from_settings_toml(tmp_path):
+    """default_password in settings.toml is migrated to secrets.toml on first load."""
+    (tmp_path / "settings.toml").write_text('default_password = "migrated_pw"\n')
+    assert load_default_password(config_dir=tmp_path) == "migrated_pw"
+    assert (tmp_path / "secrets.toml").exists()
+
+
+def test_migrate_repeater_passwords_from_passwords_toml(tmp_path):
+    """Passwords in passwords.toml are migrated to secrets.toml on first load."""
+    (tmp_path / "passwords.toml").write_text('[passwords]\n"key1" = "pw1"\n')
+    (tmp_path / "passwords.toml").chmod(0o600)
+    passwords = load_repeater_passwords(config_dir=tmp_path)
+    assert passwords["key1"] == "pw1"
+    assert (tmp_path / "secrets.toml").exists()
+
+
+def test_migration_writes_600_permissions(tmp_path):
+    (tmp_path / "settings.toml").write_text('default_password = "pw"\n')
+    load_default_password(config_dir=tmp_path)
+    mode = (tmp_path / "secrets.toml").stat().st_mode
+    assert stat.S_IMODE(mode) == 0o600

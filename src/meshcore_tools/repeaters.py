@@ -132,7 +132,7 @@ class _SavePasswordScreen(ModalScreen[bool]):
             yield Static("[bold]Save password?[/bold]", markup=True)
             yield Static(
                 "Store this password for future logins?\n"
-                "[dim]Saved in plaintext in ~/.config/meshcore-tools/passwords.toml[/dim]",
+                "[dim]Saved in plaintext in ~/.config/meshcore-tools/secrets.toml[/dim]",
                 markup=True,
             )
             with Horizontal():

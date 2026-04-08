@@ -1,6 +1,6 @@
 """Tests for ConnectionConfig load/save."""
 
-import json
+import tomllib
 from unittest.mock import MagicMock, patch
 
 from meshcore_tools.connection import (
@@ -48,31 +48,33 @@ def test_save_and_load_ble(tmp_path):
     assert loaded.ble_name == "MyNode"
 
 
-def test_config_file_is_json(tmp_path):
+def test_config_file_is_toml(tmp_path):
     cfg = ConnectionConfig(type="tcp", host="127.0.0.1", port=4000)
     save_connection_config(cfg, config_dir=tmp_path)
-    raw = json.loads((tmp_path / "connection.json").read_text())
-    assert raw["type"] == "tcp"
-    assert raw["host"] == "127.0.0.1"
-    assert raw["port"] == 4000
+    raw = tomllib.loads((tmp_path / "config.toml").read_text())
+    assert raw["connection"]["type"] == "tcp"
+    assert raw["connection"]["host"] == "127.0.0.1"
+    assert raw["connection"]["port"] == 4000
 
 
 def test_load_ignores_unknown_keys(tmp_path):
-    (tmp_path / "connection.json").write_text(
-        '{"type":"tcp","host":"1.2.3.4","port":1234,"future_field":"x"}'
+    (tmp_path / "config.toml").write_text(
+        '[connection]\ntype = "tcp"\nhost = "1.2.3.4"\nport = 1234\nfuture_field = "x"\n'
     )
     loaded = load_connection_config(config_dir=tmp_path)
     assert loaded is not None
     assert loaded.host == "1.2.3.4"
 
 
-# --- legacy BLE history migration tests ---
+# --- legacy BLE history migration tests (ble_name=address → ble_address) ---
 
 
 def test_legacy_ble_history_macos_uuid_migrated(tmp_path):
     """Legacy entries with macOS UUID in ble_name are migrated to ble_address."""
     addr = "20F10AA2-D97A-D4F9-CFED-484C7576B8D4"
-    (tmp_path / "history.json").write_text(json.dumps([{"type": "ble", "ble_name": addr}]))
+    (tmp_path / "config.toml").write_text(
+        f'[[connection.history]]\ntype = "ble"\nble_name = "{addr}"\n'
+    )
     history = load_connection_history(config_dir=tmp_path)
     assert len(history) == 1
     assert history[0].ble_address == addr
@@ -82,7 +84,9 @@ def test_legacy_ble_history_macos_uuid_migrated(tmp_path):
 def test_legacy_ble_history_linux_mac_migrated(tmp_path):
     """Legacy entries with Linux MAC in ble_name are migrated to ble_address."""
     addr = "AA:BB:CC:DD:EE:FF"
-    (tmp_path / "history.json").write_text(json.dumps([{"type": "ble", "ble_name": addr}]))
+    (tmp_path / "config.toml").write_text(
+        f'[[connection.history]]\ntype = "ble"\nble_name = "{addr}"\n'
+    )
     history = load_connection_history(config_dir=tmp_path)
     assert len(history) == 1
     assert history[0].ble_address == addr
@@ -91,8 +95,11 @@ def test_legacy_ble_history_linux_mac_migrated(tmp_path):
 
 def test_ble_history_with_name_not_migrated(tmp_path):
     """Entries with a human-readable ble_name are left untouched."""
-    (tmp_path / "history.json").write_text(
-        json.dumps([{"type": "ble", "ble_name": "MeshCore-ABC", "ble_address": "AA:BB:CC:DD:EE:FF"}])
+    (tmp_path / "config.toml").write_text(
+        '[[connection.history]]\n'
+        'type = "ble"\n'
+        'ble_name = "MeshCore-ABC"\n'
+        'ble_address = "AA:BB:CC:DD:EE:FF"\n'
     )
     history = load_connection_history(config_dir=tmp_path)
     assert history[0].ble_name == "MeshCore-ABC"
@@ -104,6 +111,33 @@ def test_connection_label_legacy_ble_shows_address_suffix(tmp_path):
     cfg = ConnectionConfig(type="ble", ble_address="20F10AA2-D97A-D4F9-CFED-484C7576B8D4")
     label = connection_label(cfg)
     assert label == "BLE: …484C7576B8D4"
+
+
+# --- migration from old JSON files ---
+
+
+def test_migrate_connection_json(tmp_path):
+    """Old connection.json is migrated to config.toml on first load."""
+    import json
+    (tmp_path / "connection.json").write_text(
+        json.dumps({"type": "tcp", "host": "10.0.0.2", "port": 5001})
+    )
+    loaded = load_connection_config(config_dir=tmp_path)
+    assert loaded is not None
+    assert loaded.host == "10.0.0.2"
+    assert loaded.port == 5001
+    assert (tmp_path / "config.toml").exists()
+
+
+def test_migrate_history_json(tmp_path):
+    """Old history.json is migrated to config.toml on first load."""
+    import json
+    (tmp_path / "history.json").write_text(
+        json.dumps([{"type": "tcp", "host": "192.168.1.1", "port": 5000}])
+    )
+    history = load_connection_history(config_dir=tmp_path)
+    assert len(history) == 1
+    assert history[0].host == "192.168.1.1"
 
 
 # --- list_serial_ports tests ---
