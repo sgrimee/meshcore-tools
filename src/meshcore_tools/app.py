@@ -199,13 +199,29 @@ class MeshCoreApp(App):
                 self.query_one(CompanionInfoTab).update_info(message.self_info)
             except Exception:
                 pass
+            try:
+                self.query_one(ChatTab).set_connected(True)
+            except Exception:
+                pass
+            try:
+                self.query_one(RepeatersTab).set_connected(True)
+            except Exception:
+                pass
 
     def on_companion_disconnected(self, _: "CompanionDisconnected") -> None:
         self.sub_title = f"region={self._region}  companion: [disconnected]"
         if COMPANION_AVAILABLE:
             try:
                 self.query_one(ChatTab).clear()
+                self.query_one(ChatTab).set_connected(False)
+            except Exception:
+                pass
+            try:
                 self.query_one(RepeatersTab).clear()
+                self.query_one(RepeatersTab).set_connected(False)
+            except Exception:
+                pass
+            try:
                 self.query_one(CompanionInfoTab).clear()
             except Exception:
                 pass
