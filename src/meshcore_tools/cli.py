@@ -79,10 +79,24 @@ def main() -> None:
             logging.getLogger().addHandler(fh)
             logging.getLogger().setLevel(logging.DEBUG)
         from meshcore_tools.app import MeshCoreApp
-        from meshcore_tools.providers.letsmesh_rest import LetsmeshRestProvider
+        from meshcore_tools.config import get_mqtt_config, get_packet_source_type
+        source = get_packet_source_type()
+        if source == "mqtt":
+            try:
+                from meshcore_tools.providers.mqtt_provider import MqttPacketProvider
+            except ImportError:
+                import sys
+                sys.exit("MQTT support requires: pip install 'meshcore-tools[mqtt]'")
+            mqtt_cfg = get_mqtt_config()
+            packet_provider = MqttPacketProvider(region=region, **mqtt_cfg)
+            if poll == 5:  # user kept the default — use a shorter interval for MQTT
+                poll = 1
+        else:
+            from meshcore_tools.providers.letsmesh_rest import LetsmeshRestProvider
+            packet_provider = LetsmeshRestProvider()
         MeshCoreApp(
             region=region,
-            packet_provider=LetsmeshRestProvider(),
+            packet_provider=packet_provider,
             poll_interval=poll,
             channels_path=channels,
         ).run()

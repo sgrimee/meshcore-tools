@@ -23,9 +23,13 @@ check:
     uv run ruff check --fix
     uv run ty check
 
-# Run tests
+# Run unit tests (default)
 test *args:
     uv run pytest {{ args }}
+
+# Run live end-to-end tests (require external services, use real credentials from settings.toml)
+test-live *args:
+    uv run pytest tests_live/ -v {{ args }}
 
 # Update node database from input files and APIs
 update region="LUX":

@@ -9,6 +9,7 @@ dependencies = ["textual>=0.80", "msgpack>=1.0", "pycryptodome>=3.19", "pyserial
 [project.optional-dependencies]
 map = ["textual-image", "staticmap", "Pillow"]
 companion = ["meshcore>=2.3.3"]
+mqtt = ["paho-mqtt>=2.0"]
 
 [project.scripts]
 meshcore-tools = "meshcore_tools.cli:main"
@@ -34,6 +35,9 @@ exclude = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "live: end-to-end tests that require real external services (not run by default)",
+]
 
 [dependency-groups]
 dev = [
@@ -41,4 +45,5 @@ dev = [
     "pytest-cov>=7.1.0",
     "ruff>=0.15.7",
     "ty>=0.0.24",
+    "paho-mqtt>=2.0",
 ]

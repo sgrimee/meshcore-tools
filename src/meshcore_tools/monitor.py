@@ -629,6 +629,7 @@ class PacketMonitorApp(App):
             pkt_dec = decode_packet(p.get("raw_data", "") or "")
             p["_path"] = pkt_dec.get("path") or []
             p["_decoded"] = pkt_dec
+            p.setdefault("payload_type", pkt_dec.get("payload_type", ""))
             decoded_payload = pkt_dec.get("decoded") or {}
             p["_src_hash"] = decoded_payload.get("src_hash", "")
             p["_route_type"] = pkt_dec.get("route_type", "")
@@ -1064,6 +1065,7 @@ class MonitorTab(TabPane):
             pkt_dec = decode_packet(p.get("raw_data", "") or "")
             p["_path"] = pkt_dec.get("path") or []
             p["_decoded"] = pkt_dec
+            p.setdefault("payload_type", pkt_dec.get("payload_type", ""))
             decoded_payload = pkt_dec.get("decoded") or {}
             p["_src_hash"] = decoded_payload.get("src_hash", "")
             p["_route_type"] = pkt_dec.get("route_type", "")

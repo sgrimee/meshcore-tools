@@ -55,6 +55,32 @@ def save_region(region: str, config_dir: Path | None = None) -> None:
     save_settings(settings, config_dir)
 
 
+def get_packet_source_type(config_dir: Path | None = None) -> str:
+    """Return configured packet source type: 'letsmesh' (default) or 'mqtt'."""
+    settings = load_settings(config_dir)
+    return settings.get("packet_source", {}).get("type", "letsmesh")
+
+
+def get_mqtt_config(config_dir: Path | None = None) -> dict:
+    """Return MQTT connection parameters from settings.toml [mqtt] section.
+
+    Keys: broker, port (int, default 1883), topic (default 'meshcore/raw'),
+    username (optional), password (optional).
+    """
+    settings = load_settings(config_dir)
+    mqtt = settings.get("mqtt", {})
+    cfg: dict = {
+        "broker": mqtt.get("broker", "localhost"),
+        "port": int(mqtt.get("port", 1883)),
+        "topic": mqtt.get("topic", "meshcore/raw"),
+    }
+    if "username" in mqtt:
+        cfg["username"] = mqtt["username"]
+    if "password" in mqtt:
+        cfg["password"] = mqtt["password"]
+    return cfg
+
+
 # ---------------------------------------------------------------------------
 # Minimal TOML writer (no third-party dependency needed for writing)
 # ---------------------------------------------------------------------------
