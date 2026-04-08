@@ -9,7 +9,7 @@ from rich.markup import escape as markup_escape
 from textual import work
 from textual.app import ComposeResult
 from textual.containers import Container, VerticalScroll
-from textual.widgets import Button, Input, Static, TabPane
+from textual.widgets import Input, Static, TabPane
 
 from meshcore_tools.repeaters import _format_response
 
@@ -42,20 +42,17 @@ class CompanionInfoTab(TabPane):
         height: 1fr;
         layout: vertical;
     }
-    CompanionInfoTab #info_panel {
+    CompanionInfoTab #not_connected_banner {
         height: auto;
         padding: 1 2;
         background: $panel;
         border-bottom: solid $accent;
     }
-    CompanionInfoTab #info_header {
-        color: $accent;
-        text-style: bold;
-        margin-bottom: 1;
-    }
-    CompanionInfoTab #refresh_btn {
-        margin-top: 1;
-        width: 12;
+    CompanionInfoTab #info_panel {
+        height: auto;
+        padding: 1 2;
+        background: $panel;
+        border-bottom: solid $accent;
     }
     CompanionInfoTab #output_log {
         height: 1fr;
@@ -74,13 +71,15 @@ class CompanionInfoTab(TabPane):
         self._log_lines: list[str] = []
 
     def compose(self) -> ComposeResult:
+        yield Static("[dim]Not connected[/dim]", id="not_connected_banner", markup=True)
         with Container(id="info_panel"):
-            yield Static("[bold]Companion Device[/bold]", id="info_header", markup=True)
-            yield Static("[dim]Not connected[/dim]", id="info_content", markup=True)
-            yield Button("Refresh", id="refresh_btn")
+            yield Static("", id="info_content", markup=True)
         with VerticalScroll(id="output_log"):
             yield Static("", id="output_content", markup=True)
         yield Input(placeholder="command", id="cmd_bar")
+
+    def on_mount(self) -> None:
+        self.query_one("#info_panel").display = False
 
     def update_info(self, self_info: dict) -> None:
         """Update displayed info from a self_info dict (called by MeshCoreApp on connect)."""
@@ -90,7 +89,7 @@ class CompanionInfoTab(TabPane):
     def _render_info(self) -> None:
         info = self._self_info
         if not info:
-            self.query_one("#info_content", Static).update("[dim]Not connected[/dim]")
+            self.query_one("#info_content", Static).update("")
             return
 
         # Determine column width from labels that have data
@@ -143,10 +142,6 @@ class CompanionInfoTab(TabPane):
         except Exception:
             pass
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "refresh_btn":
-            self._do_refresh()
-
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "cmd_bar":
             return
@@ -155,21 +150,6 @@ class CompanionInfoTab(TabPane):
         if not cmd:
             return
         self._do_cmd(cmd)
-
-    @work(thread=False, exclusive=False)
-    async def _do_refresh(self) -> None:
-        manager: CompanionManager | None = getattr(self.app, "companion", None)
-        if not manager or not manager.is_connected:
-            self._log("Not connected", "red")
-            return
-        self._log("Refreshing…", "dim")
-        info = manager.get_self_info()
-        if info:
-            self._self_info = info
-            self._render_info()
-            self._log("Info refreshed", "green")
-        else:
-            self._log("No info returned", "yellow")
 
     @work(thread=False, exclusive=False)
     async def _do_cmd(self, cmd: str) -> None:
@@ -183,6 +163,14 @@ class CompanionInfoTab(TabPane):
             self._log(markup_escape(result), "red")
         else:
             self._log(f"[bold]{markup_escape(cmd)}:[/bold]\n{_format_response(result)}", "green")
+
+    def set_connected(self, connected: bool) -> None:
+        """Show/hide the 'not connected' banner based on companion connection state."""
+        try:
+            self.query_one("#not_connected_banner", Static).display = not connected
+            self.query_one("#info_panel").display = connected
+        except Exception:
+            pass
 
     def clear(self) -> None:
         """Clear info and log a disconnect event (called by MeshCoreApp on disconnect)."""

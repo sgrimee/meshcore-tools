@@ -197,6 +197,7 @@ class MeshCoreApp(App):
         if COMPANION_AVAILABLE:
             try:
                 self.query_one(CompanionInfoTab).update_info(message.self_info)
+                self.query_one(CompanionInfoTab).set_connected(True)
             except Exception:
                 pass
             try:
@@ -225,6 +226,7 @@ class MeshCoreApp(App):
                 pass
             try:
                 self.query_one(CompanionInfoTab).clear()
+                self.query_one(CompanionInfoTab).set_connected(False)
             except Exception:
                 pass
 
