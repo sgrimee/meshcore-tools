@@ -148,7 +148,7 @@ class CompanionInfoTab(TabPane):
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "cmd_bar":
             return
-        cmd = event.value.strip()
+        cmd = event.value.strip().lstrip("/")
         event.input.value = ""
         if not cmd:
             return
@@ -177,10 +177,11 @@ class CompanionInfoTab(TabPane):
             return
         self._log(f"→ {markup_escape(cmd)}", "cyan")
         result = await manager.send_self_cmd(cmd)
-        if result in ("not connected",) or result.startswith("error"):
-            self._log(f"cmd: {markup_escape(result)}", "red")
+        if result in ("not connected",) or result.startswith("error") or result.startswith("unknown command"):
+            self._log(markup_escape(result), "red")
         else:
-            self._log(f"cmd: {markup_escape(result)}", "green")
+            from meshcore_tools.repeaters import _format_response
+            self._log(f"[bold]{markup_escape(cmd)}:[/bold]\n{_format_response(result)}", "green")
 
     def clear(self) -> None:
         """Clear info and log a disconnect event (called by MeshCoreApp on disconnect)."""

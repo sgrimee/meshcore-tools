@@ -571,20 +571,56 @@ class CompanionManager:
         return dict(self._client.self_info or {})
 
     async def send_self_cmd(self, cmd: str) -> str:
-        """Send a command to the companion device itself. Returns the response text."""
+        """Handle a local device command typed in the F4 Companion tab.
+
+        Maps text commands to the appropriate meshcore device API calls.
+        ``send_cmd`` sends packets over the air to remote contacts and cannot
+        be used to address the companion device itself (firmware returns
+        ERR_CODE_NOT_FOUND).
+        """
         if not self._client or not self._connected:
             return "not connected"
-        self_info = self._client.self_info or {}
-        node_key = self_info.get("public_key", "")
-        if not node_key:
-            return "error: companion public key unknown"
-        # Build a minimal contact dict targeting the companion itself
-        self_contact = {"public_key": node_key, "type": 2}
+
+        _HELP = (
+            "available commands: ver, infos, bat, time, advert, device, reboot"
+        )
+
+        cmd_lower = cmd.lower().strip()
         try:
-            result = await self._client.commands.send_cmd(dst=self_contact, cmd=cmd)
-            if str(getattr(result, "type", "")) == str(_EventType.ERROR):
-                return f"error: {result.payload}"
-            return "sent"
+            if cmd_lower in ("ver", "version", "infos", "info"):
+                result = await self._client.commands.send_appstart()
+                if str(getattr(result, "type", "")) == str(_EventType.ERROR):
+                    return f"error: {result.payload}"
+                return str(result.payload)
+            elif cmd_lower in ("bat", "battery"):
+                result = await self._client.commands.get_bat()
+                if str(getattr(result, "type", "")) == str(_EventType.ERROR):
+                    return f"error: {result.payload}"
+                return str(result.payload)
+            elif cmd_lower == "time":
+                result = await self._client.commands.get_time()
+                if str(getattr(result, "type", "")) == str(_EventType.ERROR):
+                    return f"error: {result.payload}"
+                return str(result.payload)
+            elif cmd_lower in ("advert", "advertise"):
+                result = await self._client.commands.send_advert()
+                if str(getattr(result, "type", "")) == str(_EventType.ERROR):
+                    return f"error: {result.payload}"
+                return "ok"
+            elif cmd_lower in ("device", "devinfo"):
+                result = await self._client.commands.send_device_query()
+                if str(getattr(result, "type", "")) == str(_EventType.ERROR):
+                    return f"error: {result.payload}"
+                return str(result.payload)
+            elif cmd_lower == "reboot":
+                result = await self._client.commands.reboot()
+                if str(getattr(result, "type", "")) == str(_EventType.ERROR):
+                    return f"error: {result.payload}"
+                return "ok"
+            elif cmd_lower in ("help", "?"):
+                return _HELP
+            else:
+                return f"unknown command '{cmd}' — {_HELP}"
         except Exception as exc:
             return f"error: {exc}"
 
