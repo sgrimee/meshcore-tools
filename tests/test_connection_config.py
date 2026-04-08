@@ -5,9 +5,11 @@ from unittest.mock import MagicMock, patch
 
 from meshcore_tools.connection import (
     ConnectionConfig,
+    connection_label,
     format_ble_devices,
     list_serial_ports,
     load_connection_config,
+    load_connection_history,
     save_connection_config,
 )
 
@@ -62,6 +64,46 @@ def test_load_ignores_unknown_keys(tmp_path):
     loaded = load_connection_config(config_dir=tmp_path)
     assert loaded is not None
     assert loaded.host == "1.2.3.4"
+
+
+# --- legacy BLE history migration tests ---
+
+
+def test_legacy_ble_history_macos_uuid_migrated(tmp_path):
+    """Legacy entries with macOS UUID in ble_name are migrated to ble_address."""
+    addr = "20F10AA2-D97A-D4F9-CFED-484C7576B8D4"
+    (tmp_path / "history.json").write_text(json.dumps([{"type": "ble", "ble_name": addr}]))
+    history = load_connection_history(config_dir=tmp_path)
+    assert len(history) == 1
+    assert history[0].ble_address == addr
+    assert history[0].ble_name is None
+
+
+def test_legacy_ble_history_linux_mac_migrated(tmp_path):
+    """Legacy entries with Linux MAC in ble_name are migrated to ble_address."""
+    addr = "AA:BB:CC:DD:EE:FF"
+    (tmp_path / "history.json").write_text(json.dumps([{"type": "ble", "ble_name": addr}]))
+    history = load_connection_history(config_dir=tmp_path)
+    assert len(history) == 1
+    assert history[0].ble_address == addr
+    assert history[0].ble_name is None
+
+
+def test_ble_history_with_name_not_migrated(tmp_path):
+    """Entries with a human-readable ble_name are left untouched."""
+    (tmp_path / "history.json").write_text(
+        json.dumps([{"type": "ble", "ble_name": "MeshCore-ABC", "ble_address": "AA:BB:CC:DD:EE:FF"}])
+    )
+    history = load_connection_history(config_dir=tmp_path)
+    assert history[0].ble_name == "MeshCore-ABC"
+    assert history[0].ble_address == "AA:BB:CC:DD:EE:FF"
+
+
+def test_connection_label_legacy_ble_shows_address_suffix(tmp_path):
+    """Legacy BLE entry (no name) shows last 12 chars of address."""
+    cfg = ConnectionConfig(type="ble", ble_address="20F10AA2-D97A-D4F9-CFED-484C7576B8D4")
+    label = connection_label(cfg)
+    assert label == "BLE: …484C7576B8D4"
 
 
 # --- list_serial_ports tests ---

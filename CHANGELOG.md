@@ -8,7 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Add node blacklist to filter spurious address-collision nodes
+- Add F4 companion info tab with device info panel and command input
+- Add settings.toml to persist default region
+- Import channels from channels.txt to connected companion
+- Show recent connections expanded by default in ConnectScreen
+- Colour unread dot indicator in tab labels with warning amber
+- Add unread message indicators for channels and DMs
+- Persist companion channel data to channels.txt for packet decryption
+- Save per-repeater passwords with fallback default in config
 - Format JSON command responses as key: value lines
+
+### Changed
+- Skip code review for PRs authored by claude[bot]
+
+### Fixed
+- Show BLE device name instead of MAC address in recent companion list
+- Show unread dot when message received for selected contact while tab is inactive
+- Recognise channel_secret field and skip all-zero keys in _extract_channel_key_hex
+- Add reload_channels method to MonitorTab and store _channels_path
+- Rename ambiguous variable l to line in test_channels.py
+- Allow bots to trigger claude code review workflow
+- Parse Python dict reprs and improve response formatting
+- Accept bool | None in _on_save callback to satisfy push_screen type overloads
 
 ## [0.2.0] - 2026-04-03
 

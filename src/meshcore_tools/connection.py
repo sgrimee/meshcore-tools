@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import platform
+import re
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -96,6 +97,27 @@ def save_connection_history(
     (config_dir / "history.json").write_text(json.dumps(data, indent=2))
 
 
+_BLE_ADDR_RE = re.compile(
+    r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$"  # Linux MAC
+    r"|^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$"  # macOS UUID
+)
+
+
+def _migrate_ble_entry(c: ConnectionConfig) -> ConnectionConfig:
+    """Move legacy ble_name=<address> entries to ble_address, leaving ble_name None."""
+    if c.type == "ble" and c.ble_address is None and c.ble_name and _BLE_ADDR_RE.match(c.ble_name):
+        return ConnectionConfig(
+            type=c.type,
+            host=c.host,
+            port=c.port,
+            device=c.device,
+            ble_name=None,
+            ble_address=c.ble_name,
+            ble_pin=c.ble_pin,
+        )
+    return c
+
+
 def load_connection_history(config_dir: Path = _DEFAULT_CONFIG_DIR) -> list[ConnectionConfig]:
     """Return recent connections, most recent first. Returns [] on any error."""
     path = config_dir / "history.json"
@@ -104,14 +126,16 @@ def load_connection_history(config_dir: Path = _DEFAULT_CONFIG_DIR) -> list[Conn
     try:
         entries = json.loads(path.read_text())
         return [
-            ConnectionConfig(
-                type=e.get("type", "tcp"),
-                host=e.get("host"),
-                port=e.get("port"),
-                device=e.get("device"),
-                ble_name=e.get("ble_name"),
-                ble_address=e.get("ble_address"),
-                ble_pin=e.get("ble_pin"),
+            _migrate_ble_entry(
+                ConnectionConfig(
+                    type=e.get("type", "tcp"),
+                    host=e.get("host"),
+                    port=e.get("port"),
+                    device=e.get("device"),
+                    ble_name=e.get("ble_name"),
+                    ble_address=e.get("ble_address"),
+                    ble_pin=e.get("ble_pin"),
+                )
             )
             for e in entries
             if isinstance(e, dict)
@@ -123,7 +147,8 @@ def load_connection_history(config_dir: Path = _DEFAULT_CONFIG_DIR) -> list[Conn
 def connection_label(c: ConnectionConfig) -> str:
     """Human-readable one-liner for display in the Recent section."""
     if c.type == "ble":
-        return f"BLE: {c.ble_name or '?'}"
+        name = c.ble_name or (f"…{c.ble_address[-12:]}" if c.ble_address else "?")
+        return f"BLE: {name}"
     if c.type == "tcp":
         return f"TCP: {c.host or '?'}:{c.port or 5000}"
     if c.type == "serial":
@@ -358,6 +383,8 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
                 self.call_after_refresh(first_btn.focus)
         else:
             recent_section.display = False
+        if any(c.type == "ble" and not c.ble_name for c in history):
+            self._resolve_ble_names()
 
     def _show_section(self, conn_type: str) -> None:
         self.query_one("#tcp-section").display = (conn_type == "tcp")
@@ -404,6 +431,40 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
             btn.disabled = sel.value is Select.NULL or not sel.display
         else:
             btn.disabled = True
+
+    @work
+    async def _resolve_ble_names(self) -> None:
+        """Background scan to fill in names for legacy BLE history entries."""
+        try:
+            if platform.system() == "Darwin":
+                options = await _scan_ble_subprocess()
+            elif _BLEAK_AVAILABLE:
+                devices = await BleakScanner.discover(timeout=5.0)
+                options = [
+                    (f"{d.name}  {d.address}", d.address)
+                    for d in devices
+                    if d.name and d.name.startswith("MeshCore")
+                ]
+            else:
+                return
+            name_map: dict[str, str] = {}
+            for label, addr in options:
+                name_part = label.replace(f"  {addr}", "").strip()
+                if name_part:
+                    name_map[addr] = name_part
+            for btn in self.query(_RecentButton):
+                if btn.config.type == "ble" and not btn.config.ble_name and btn.config.ble_address:
+                    name = name_map.get(btn.config.ble_address)
+                    if name:
+                        btn.config = ConnectionConfig(
+                            type="ble",
+                            ble_name=name,
+                            ble_address=btn.config.ble_address,
+                            ble_pin=btn.config.ble_pin,
+                        )
+                        btn.label = connection_label(btn.config)
+        except Exception:
+            pass
 
     @work
     async def _scan_ble(self) -> None:
