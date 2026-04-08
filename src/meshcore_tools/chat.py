@@ -97,6 +97,16 @@ class ChatTab(TabPane):
     DEFAULT_CSS = """
     ChatTab {
         height: 1fr;
+        layout: vertical;
+    }
+    ChatTab #not_connected_banner {
+        height: auto;
+        padding: 1 2;
+        background: $panel;
+        border-bottom: solid $accent;
+    }
+    ChatTab #content_area {
+        height: 1fr;
         layout: horizontal;
     }
     ChatTab #left_pane {
@@ -151,19 +161,21 @@ class ChatTab(TabPane):
         self._unread: dict[int, int] = {}  # channel_idx → unread count
 
     def compose(self) -> ComposeResult:
-        with Container(id="left_pane"):
-            yield ListView(id="channel_list")
-            yield Button("Import channels", id="btn_import_channels")
-        with Container(id="right_pane"):
-            with VerticalScroll(id="msg_log"):
-                yield Static("", id="msg_content", markup=True)
-            with Container(id="input_bar"):
-                yield Input(
-                    placeholder="type a message…",
-                    id="msg_input",
-                    max_length=_MAX_MSG_LEN,
-                )
-                yield Label(f"0/{_MAX_MSG_LEN}", id="char_count")
+        yield Static("[dim]Not connected[/dim]", id="not_connected_banner", markup=True)
+        with Container(id="content_area"):
+            with Container(id="left_pane"):
+                yield ListView(id="channel_list")
+                yield Button("Import channels", id="btn_import_channels")
+            with Container(id="right_pane"):
+                with VerticalScroll(id="msg_log"):
+                    yield Static("", id="msg_content", markup=True)
+                with Container(id="input_bar"):
+                    yield Input(
+                        placeholder="type a message…",
+                        id="msg_input",
+                        max_length=_MAX_MSG_LEN,
+                    )
+                    yield Label(f"0/{_MAX_MSG_LEN}", id="char_count")
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "msg_input":
@@ -411,6 +423,13 @@ class ChatTab(TabPane):
         else:
             self._unread[channel_idx] = self._unread.get(channel_idx, 0) + 1
             self._refresh_channel_item(channel_idx)
+
+    def set_connected(self, connected: bool) -> None:
+        """Show/hide the 'not connected' banner based on companion connection state."""
+        try:
+            self.query_one("#not_connected_banner", Static).display = not connected
+        except Exception:
+            pass
 
     def clear(self) -> None:
         """Clear all messages and channels (called on disconnect)."""

@@ -168,6 +168,16 @@ class RepeatersTab(TabPane):
     DEFAULT_CSS = """
     RepeatersTab {
         height: 1fr;
+        layout: vertical;
+    }
+    RepeatersTab #not_connected_banner {
+        height: auto;
+        padding: 1 2;
+        background: $panel;
+        border-bottom: solid $accent;
+    }
+    RepeatersTab #content_area {
+        height: 1fr;
         layout: horizontal;
     }
     RepeatersTab #repeater_list {
@@ -226,18 +236,20 @@ class RepeatersTab(TabPane):
         self._unread: dict[int, int] = {}  # contact index → unread count
 
     def compose(self) -> ComposeResult:
-        yield ListView(id="repeater_list")
-        with Container(id="right_pane"):
-            with Container(id="cmd_buttons"):
-                yield _CmdButton("Ping", id="btn_ping")
-                yield _CmdButton("Status", id="btn_status")
-                yield _CmdButton("Telemetry", id="btn_telemetry")
-                yield _CmdButton("Login", id="btn_login")
-                yield _CmdButton("Trace", id="btn_trace")
-                yield _CmdButton("Reboot", variant="error", id="btn_reboot")
-            with VerticalScroll(id="output_log"):
-                yield Static("", id="output_content", markup=True)
-            yield Input(placeholder="DM text  or  /command", id="input_bar")
+        yield Static("[dim]Not connected[/dim]", id="not_connected_banner", markup=True)
+        with Container(id="content_area"):
+            yield ListView(id="repeater_list")
+            with Container(id="right_pane"):
+                with Container(id="cmd_buttons"):
+                    yield _CmdButton("Ping", id="btn_ping")
+                    yield _CmdButton("Status", id="btn_status")
+                    yield _CmdButton("Telemetry", id="btn_telemetry")
+                    yield _CmdButton("Login", id="btn_login")
+                    yield _CmdButton("Trace", id="btn_trace")
+                    yield _CmdButton("Reboot", variant="error", id="btn_reboot")
+                with VerticalScroll(id="output_log"):
+                    yield Static("", id="output_content", markup=True)
+                yield Input(placeholder="DM text  or  /command", id="input_bar")
 
     def on_mount(self) -> None:
         self._update_cmd_visibility()
@@ -679,6 +691,13 @@ class RepeatersTab(TabPane):
             self._log(f"reboot: {markup_escape(result)}", "red", idx=contact_idx)
         else:
             self._log(f"reboot: {markup_escape(result)}", "yellow", idx=contact_idx)
+
+    def set_connected(self, connected: bool) -> None:
+        """Show/hide the 'not connected' banner based on companion connection state."""
+        try:
+            self.query_one("#not_connected_banner", Static).display = not connected
+        except Exception:
+            pass
 
     def clear(self) -> None:
         """Clear log and contact list (called on disconnect)."""
