@@ -426,10 +426,7 @@ class ChatTab(TabPane):
 
     def set_connected(self, connected: bool) -> None:
         """Show/hide the 'not connected' banner based on companion connection state."""
-        try:
-            self.query_one("#not_connected_banner", Static).display = not connected
-        except Exception:
-            pass
+        self.query_one("#not_connected_banner", Static).display = not connected
 
     def clear(self) -> None:
         """Clear all messages and channels (called on disconnect)."""

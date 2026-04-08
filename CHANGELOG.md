@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Skip code review for PRs authored by claude[bot]
+- Refactor companion command dispatch with shared error helper; remove redundant exception wrapping in set_connected and deduplicate query_one calls
 
 ### Fixed
 - Skip code review for Claude Code-authored PRs

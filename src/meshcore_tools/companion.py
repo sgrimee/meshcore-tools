@@ -28,6 +28,20 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_SELF_CMD_HELP = "available commands: ver, infos, bat, time, advert, device, reboot"
+
+
+def _result_or_error(result: Any, ok: str | None = None) -> str:
+    """Return the result payload, or an error string if the result is an error event."""
+    if str(getattr(result, "type", "")) == str(_EventType.ERROR):
+        return f"error: {result.payload}"
+    return ok if ok is not None else str(result.payload)
+
+
+# ---------------------------------------------------------------------------
 # Custom Textual messages posted to the app from CompanionManager callbacks
 # ---------------------------------------------------------------------------
 
@@ -581,46 +595,24 @@ class CompanionManager:
         if not self._client or not self._connected:
             return "not connected"
 
-        _HELP = (
-            "available commands: ver, infos, bat, time, advert, device, reboot"
-        )
-
         cmd_lower = cmd.lower().strip()
         try:
             if cmd_lower in ("ver", "version", "infos", "info"):
-                result = await self._client.commands.send_appstart()
-                if str(getattr(result, "type", "")) == str(_EventType.ERROR):
-                    return f"error: {result.payload}"
-                return str(result.payload)
+                return _result_or_error(await self._client.commands.send_appstart())
             elif cmd_lower in ("bat", "battery"):
-                result = await self._client.commands.get_bat()
-                if str(getattr(result, "type", "")) == str(_EventType.ERROR):
-                    return f"error: {result.payload}"
-                return str(result.payload)
+                return _result_or_error(await self._client.commands.get_bat())
             elif cmd_lower == "time":
-                result = await self._client.commands.get_time()
-                if str(getattr(result, "type", "")) == str(_EventType.ERROR):
-                    return f"error: {result.payload}"
-                return str(result.payload)
+                return _result_or_error(await self._client.commands.get_time())
             elif cmd_lower in ("advert", "advertise"):
-                result = await self._client.commands.send_advert()
-                if str(getattr(result, "type", "")) == str(_EventType.ERROR):
-                    return f"error: {result.payload}"
-                return "ok"
+                return _result_or_error(await self._client.commands.send_advert(), "ok")
             elif cmd_lower in ("device", "devinfo"):
-                result = await self._client.commands.send_device_query()
-                if str(getattr(result, "type", "")) == str(_EventType.ERROR):
-                    return f"error: {result.payload}"
-                return str(result.payload)
+                return _result_or_error(await self._client.commands.send_device_query())
             elif cmd_lower == "reboot":
-                result = await self._client.commands.reboot()
-                if str(getattr(result, "type", "")) == str(_EventType.ERROR):
-                    return f"error: {result.payload}"
-                return "ok"
+                return _result_or_error(await self._client.commands.reboot(), "ok")
             elif cmd_lower in ("help", "?"):
-                return _HELP
+                return _SELF_CMD_HELP
             else:
-                return f"unknown command '{cmd}' — {_HELP}"
+                return f"unknown command '{cmd}' — {_SELF_CMD_HELP}"
         except Exception as exc:
             return f"error: {exc}"
 

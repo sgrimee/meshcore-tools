@@ -11,6 +11,8 @@ from textual.app import ComposeResult
 from textual.containers import Container, VerticalScroll
 from textual.widgets import Button, Input, Static, TabPane
 
+from meshcore_tools.repeaters import _format_response
+
 if TYPE_CHECKING:
     from meshcore_tools.companion import CompanionManager
 
@@ -180,7 +182,6 @@ class CompanionInfoTab(TabPane):
         if result in ("not connected",) or result.startswith("error") or result.startswith("unknown command"):
             self._log(markup_escape(result), "red")
         else:
-            from meshcore_tools.repeaters import _format_response
             self._log(f"[bold]{markup_escape(cmd)}:[/bold]\n{_format_response(result)}", "green")
 
     def clear(self) -> None:
