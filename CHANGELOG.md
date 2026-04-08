@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Show 'Not connected' banner on F2 Channels and F3 Contacts tabs
 - Add node blacklist to filter spurious address-collision nodes
 - Add F4 companion info tab with device info panel and command input
 - Add settings.toml to persist default region
@@ -23,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Skip code review for PRs authored by claude[bot]
 
 ### Fixed
+- Skip code review for Claude Code-authored PRs
+- Map F4 companion tab commands to binary API calls
+- Resolve BLE device names for legacy history entries
 - Show BLE device name instead of MAC address in recent companion list
 - Show unread dot when message received for selected contact while tab is inactive
 - Recognise channel_secret field and skip all-zero keys in _extract_channel_key_hex
