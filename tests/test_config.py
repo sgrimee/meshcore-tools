@@ -1,10 +1,9 @@
 """Tests for config.py — XDG-compliant settings persistence."""
 
-from pathlib import Path
 
-import pytest
 
 from meshcore_tools.config import (
+    get_blacklist,
     get_region,
     load_settings,
     save_region,
@@ -67,6 +66,34 @@ def test_save_region_preserves_other_settings(tmp_path):
     result = load_settings(tmp_path)
     assert result["general"]["foo"] == "bar"
     assert result["general"]["region"] == "EU"
+
+
+def test_get_blacklist_empty_when_missing(tmp_path):
+    assert get_blacklist(tmp_path) == []
+
+
+def test_get_blacklist_returns_list(tmp_path):
+    (tmp_path / "settings.toml").write_text('[filtering]\nblacklist = ["Valto Rasta", "abc123"]\n')
+    assert get_blacklist(tmp_path) == ["Valto Rasta", "abc123"]
+
+
+def test_get_blacklist_empty_section(tmp_path):
+    (tmp_path / "settings.toml").write_text("[filtering]\n")
+    assert get_blacklist(tmp_path) == []
+
+
+def test_save_region_preserves_blacklist(tmp_path):
+    """save_region() must not corrupt a blacklist array already in settings.toml."""
+    (tmp_path / "settings.toml").write_text('[general]\nregion = "LUX"\n\n[filtering]\nblacklist = ["Valto Rasta"]\n')
+    save_region("EU", tmp_path)
+    assert get_region(tmp_path) == "EU"
+    assert get_blacklist(tmp_path) == ["Valto Rasta"]
+
+
+def test_toml_list_round_trip(tmp_path):
+    save_settings({"filtering": {"blacklist": ["A", "B"]}}, tmp_path)
+    result = load_settings(tmp_path)
+    assert result["filtering"]["blacklist"] == ["A", "B"]
 
 
 def test_xdg_config_home_respected(tmp_path, monkeypatch):

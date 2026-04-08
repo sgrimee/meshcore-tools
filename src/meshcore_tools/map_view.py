@@ -9,6 +9,8 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+import logging
+
 from rich.markup import escape as markup_escape
 from textual import work
 from textual.app import ComposeResult
@@ -17,8 +19,10 @@ from textual.containers import Container, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Static
 
-from meshcore_tools.db import resolve_name
+from meshcore_tools.db import is_blacklisted, resolve_name
 from meshcore_tools.decoder import GROUP_TYPES, decode_packet
+
+logger = logging.getLogger(__name__)
 
 try:
     from staticmap import CircleMarker, Line, StaticMap
@@ -57,7 +61,7 @@ def _lookup_coords(node_id: str, db: dict) -> tuple[float, float] | None:
 
 
 def collect_map_nodes(
-    packet: dict, db: dict
+    packet: dict, db: dict, blacklist: list[str] | None = None
 ) -> tuple[list[tuple[str, str, float, float]], list[str], list[tuple[float, float]]]:
     """Collect nodes involved in a packet with their coordinates.
 
@@ -67,6 +71,7 @@ def collect_map_nodes(
         path_coords: (lat, lon) pairs in routing order (source→relays→observer)
                      for drawing the path line
     """
+    bl = blacklist or []
     dec = packet.get("_decoded") or decode_packet(packet.get("raw_data", "") or "")
     payload_dec = dec.get("decoded") or {}
     ptype = dec.get("payload_type", "")
@@ -81,6 +86,9 @@ def collect_map_nodes(
     def add_node(
         node_id: str, role: str, coords: tuple[float, float] | None = None
     ) -> None:
+        if is_blacklisted(node_id, db, bl):
+            logger.debug("blacklist: skipping node %s (%s) in map", node_id, resolve_name(node_id, db))
+            return
         label = resolve_name(node_id, db)
         if coords is None:
             coords = _lookup_coords(node_id, db)
@@ -355,10 +363,10 @@ class MapSidePanel(Vertical):
             self._map_widget.remove()
             self._map_widget = None
 
-    def load_packet(self, packets: list[dict], index: int, db: dict) -> None:
+    def load_packet(self, packets: list[dict], index: int, db: dict, blacklist: list[str] | None = None) -> None:
         """Render the map for packets[index]."""
         p = packets[index]
-        placed, unplaced, path_coords = collect_map_nodes(p, db)
+        placed, unplaced, path_coords = collect_map_nodes(p, db, blacklist)
 
         self.query_one("#map_side_header", Static).update(
             f"[dim]Packet {index + 1}/{len(packets)}[/dim]"
@@ -463,11 +471,12 @@ class PacketMapScreen(ModalScreen):
         Binding("down,j", "next", "Next"),
     ]
 
-    def __init__(self, packets: list[dict], index: int, db: dict):
+    def __init__(self, packets: list[dict], index: int, db: dict, blacklist: list[str] | None = None):
         super().__init__()
         self._packets = packets
         self._index = index
         self._db = db
+        self._blacklist: list[str] = blacklist or []
         self._map_widget = None
 
     def compose(self) -> ComposeResult:
@@ -483,7 +492,7 @@ class PacketMapScreen(ModalScreen):
     def _refresh_map(self) -> None:
         p = self._packets[self._index]
         n = len(self._packets)
-        placed, unplaced, path_coords = collect_map_nodes(p, self._db)
+        placed, unplaced, path_coords = collect_map_nodes(p, self._db, self._blacklist)
 
         self.query_one("#map_header", Static).update(
             f"[dim]({self._index + 1}/{n}  ↑↓ navigate  q/Esc close)[/dim]"

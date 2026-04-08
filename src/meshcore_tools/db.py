@@ -112,16 +112,61 @@ def resolve_name(origin_id: str, db: dict) -> str:
     or the raw 8-char prefix if no match found.
     """
     origin_id = origin_id.lower()
-    names = [
-        db["nodes"][key]["name"]
-        for key in db.get("nodes", {})
-        if key.startswith(origin_id) or origin_id.startswith(key[: len(origin_id)])
-    ]
+    names = _resolved_names(origin_id, db)
     if not names:
         return origin_id[:8]
     if len(names) == 1:
         return names[0]
     return "/".join(names) + "?"
+
+
+def is_blacklisted(node_id: str, db: dict, blacklist: list[str]) -> bool:
+    """Return True if node_id matches any blacklist term (name substring or hex prefix).
+
+    Matches if ANY of the resolved names for node_id contains a blacklist term,
+    or if the hex key starts with a blacklist term. Used by map view to skip nodes
+    whose address collision would pull in wrong coordinates.
+    """
+    if not blacklist:
+        return False
+    nid = node_id.lower()
+    names = _resolved_names(nid, db)
+    if not names:
+        return any(nid.startswith(t.lower()) for t in blacklist)
+    return any(
+        t.lower() in name.lower() or nid.startswith(t.lower())
+        for t in blacklist
+        for name in names
+    )
+
+
+def resolve_name_filtered(origin_id: str, db: dict, blacklist: list[str]) -> str | None:
+    """Like resolve_name but strips entries whose name matches a blacklist term.
+
+    Returns None only when ALL resolved names are blacklisted (caller should skip
+    the node entirely). Returns the raw 8-char prefix when there are no DB matches.
+    Used by path display so that a multi-match like 'Valto Rasta/LocalNode?' shows
+    only the non-blacklisted names.
+    """
+    origin_id = origin_id.lower()
+    names = _resolved_names(origin_id, db)
+    if not names:
+        return origin_id[:8]
+    if not blacklist:
+        return names[0] if len(names) == 1 else "/".join(names) + "?"
+    kept = [n for n in names if not any(t.lower() in n.lower() for t in blacklist)]
+    if not kept:
+        return None  # all names are blacklisted — caller should skip node
+    return kept[0] if len(kept) == 1 else "/".join(kept) + "?"
+
+
+def _resolved_names(origin_id: str, db: dict) -> list[str]:
+    """Return all node names in db whose key matches origin_id as a prefix."""
+    return [
+        db["nodes"][key]["name"]
+        for key in db.get("nodes", {})
+        if key.startswith(origin_id) or origin_id.startswith(key[: len(origin_id)])
+    ]
 
 
 def update(region: str, node_provider: NodeProvider, coord_provider: CoordProvider) -> None:

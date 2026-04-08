@@ -2,31 +2,32 @@
 
 from __future__ import annotations
 
+import logging
 import textwrap
 import time
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from rich.markup import escape as markup_escape
 from rich.text import Text
-
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.screen import ModalScreen
 from textual.containers import Container, VerticalScroll
+from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Header, Input, Label, Static, TabPane
 from textual.worker import get_current_worker
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from meshcore_tools.providers import PacketProvider
 
-from meshcore_tools.db import is_input_node, learn_from_advert, load_db, resolve_name, save_db
+from meshcore_tools.channels import build_channel_lookup, load_channels, try_decrypt
+from meshcore_tools.db import is_input_node, learn_from_advert, load_db, resolve_name, resolve_name_filtered, save_db
 from meshcore_tools.decoder import GROUP_TYPES, decode_packet
 from meshcore_tools.map_view import MapSidePanel, PacketMapScreen
-from meshcore_tools.channels import build_channel_lookup, load_channels, try_decrypt
 from meshcore_tools.resize_handle import ResizeHandle
+
+logger = logging.getLogger(__name__)
 
 MAX_PACKETS = 500
 
@@ -35,7 +36,8 @@ MAX_PACKETS = 500
 
 def format_path(path_list: list, db: dict, resolve: int = 2,
                 src_hash: str = "", route_type: str = "",
-                hop_size: int = 1, ptype: str = "") -> str:
+                hop_size: int = 1, ptype: str = "",
+                blacklist: list[str] | None = None) -> str:
     """Format: source → relay1 → relay2 → ...
 
     resolve: 2 = all names, 1 = source name + relay hex, 0 = all hex.
@@ -44,23 +46,40 @@ def format_path(path_list: list, db: dict, resolve: int = 2,
     hop_size: bytes per hop — used to trim src_hash display to match relay display width.
     ptype: payload type — GroupText/GroupData have no src_hash by design; path[0] is
            the last forwarder, not the original sender.
+    blacklist: node name substrings or hex prefixes to strip from resolved names.
+               When a node has multiple DB matches (address collision), blacklisted
+               names are removed from the display; the node is hidden only if ALL
+               its names are blacklisted.
     """
+    bl = blacklist or []
     is_direct = route_type in ("Direct", "TransportDirect")
     is_group = ptype in GROUP_TYPES
 
     def _fmt(display: str, node_id: str) -> str:
         return f"[yellow]{display}[/yellow]" if is_input_node(node_id, db) else display
 
+    def _resolve(node_id: str) -> str | None:
+        """Resolve node_id to display name, filtering blacklisted names out.
+
+        Returns None when all names are blacklisted (caller should skip node).
+        """
+        if not bl:
+            return resolve_name(node_id, db)
+        name = resolve_name_filtered(node_id, db, bl)
+        if name is None:
+            logger.debug("blacklist: hiding node %s in path (all names filtered)", node_id)
+        return name
+
     # Determine source display (trim src_hash to hop_size for visual consistency)
     if src_hash:
-        text = resolve_name(src_hash, db) if resolve >= 1 else _trim_hash(src_hash, hop_size)
-        src = _fmt(text, src_hash)
+        name = _resolve(src_hash) if resolve >= 1 else _trim_hash(src_hash, hop_size)
+        src = _fmt(name, src_hash) if name is not None else "[dim]?[/dim]"
     elif is_group and not is_direct:
         # GroupText/GroupData encrypt sender identity; path[0] is the last forwarder
         src = "[dim]enc[/dim]"
     elif path_list and not is_direct:
-        text = resolve_name(path_list[0], db) if resolve >= 1 else path_list[0]
-        src = _fmt(text, path_list[0])
+        name = _resolve(path_list[0]) if resolve >= 1 else path_list[0]
+        src = _fmt(name, path_list[0]) if name is not None else "[dim]?[/dim]"
     else:
         src = "?"
 
@@ -74,10 +93,15 @@ def format_path(path_list: list, db: dict, resolve: int = 2,
     if not relays:
         return src
 
-    if resolve >= 2:
-        relay_parts = [_fmt(resolve_name(hop, db), hop) for hop in relays]
-    else:
-        relay_parts = [_fmt(hop, hop) for hop in relays]
+    relay_parts: list[str] = []
+    for hop in relays:
+        if resolve >= 2:
+            name = _resolve(hop)
+            if name is None:
+                continue
+            relay_parts.append(_fmt(name, hop))
+        else:
+            relay_parts.append(_fmt(hop, hop))
 
     return " → ".join([src] + relay_parts)
 
@@ -370,11 +394,12 @@ class PacketDetailScreen(ModalScreen):
         Binding("M", "open_map", "Map popup"),
     ]
 
-    def __init__(self, packets: list[dict], index: int, db: dict):
+    def __init__(self, packets: list[dict], index: int, db: dict, blacklist: list[str] | None = None):
         super().__init__()
         self._packets = packets
         self._index = index
         self._db = db
+        self._blacklist: list[str] = blacklist or []
 
     def compose(self) -> ComposeResult:
         yield Static("", id="content", markup=True)
@@ -409,7 +434,7 @@ class PacketDetailScreen(ModalScreen):
         self.dismiss()
 
     def action_open_map(self) -> None:
-        self.app.push_screen(PacketMapScreen(self._packets, self._index, self._db))
+        self.app.push_screen(PacketMapScreen(self._packets, self._index, self._db, self._blacklist))
 
 
 class PacketMonitorApp(App):
@@ -533,6 +558,8 @@ class PacketMonitorApp(App):
         self._map_panel_open: bool = False
         self._follow: bool = False
         self._layout_bottom: bool = False
+        from meshcore_tools.config import get_blacklist
+        self._blacklist: list[str] = get_blacklist()
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -695,7 +722,8 @@ class PacketMonitorApp(App):
                                src_hash=src_display,
                                route_type=p.get("_route_type", ""),
                                hop_size=p.get("_path_hop_size", 1),
-                               ptype=p.get("payload_type", ""))
+                               ptype=p.get("payload_type", ""),
+                               blacklist=self._blacklist)
             if self._wrap_path:
                 wrap_width = max(20, self.size.width - 58)
                 lines = textwrap.wrap(path, width=wrap_width) or [path]
@@ -725,13 +753,13 @@ class PacketMonitorApp(App):
         if not self._displayed:
             return
         row = self.query_one("#packets", DataTable).cursor_row
-        self.push_screen(PacketDetailScreen(self._displayed, row, self._db))
+        self.push_screen(PacketDetailScreen(self._displayed, row, self._db, self._blacklist))
 
     def action_open_map(self) -> None:
         if not self._displayed:
             return
         row = self.query_one("#packets", DataTable).cursor_row
-        self.push_screen(PacketMapScreen(self._displayed, row, self._db))
+        self.push_screen(PacketMapScreen(self._displayed, row, self._db, self._blacklist))
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         row = event.cursor_row
@@ -751,7 +779,7 @@ class PacketMonitorApp(App):
     def _update_map_side(self, row: int) -> None:
         if not self._displayed or row >= len(self._displayed):
             return
-        self.query_one(MapSidePanel).load_packet(self._displayed, row, self._db)
+        self.query_one(MapSidePanel).load_packet(self._displayed, row, self._db, self._blacklist)
 
     def _sync_panel_area(self) -> None:
         """Show #panel_area (and resize handles) based on which panels are open."""
@@ -968,6 +996,8 @@ class MonitorTab(TabPane):
         self._map_panel_open: bool = False
         self._follow: bool = False
         self._layout_bottom: bool = False
+        from meshcore_tools.config import get_blacklist
+        self._blacklist: list[str] = get_blacklist()
 
     def compose(self) -> ComposeResult:
         with Container(id="main_area"):
@@ -1123,7 +1153,8 @@ class MonitorTab(TabPane):
                                src_hash=src_display,
                                route_type=p.get("_route_type", ""),
                                hop_size=p.get("_path_hop_size", 1),
-                               ptype=p.get("payload_type", ""))
+                               ptype=p.get("payload_type", ""),
+                               blacklist=self._blacklist)
             if self._wrap_path:
                 wrap_width = max(20, self.app.size.width - 58)
                 lines = textwrap.wrap(path, width=wrap_width) or [path]
@@ -1151,7 +1182,7 @@ class MonitorTab(TabPane):
         if not self._displayed:
             return
         row = self.query_one("#packets", DataTable).cursor_row
-        self.app.push_screen(PacketDetailScreen(self._displayed, row, self._db))
+        self.app.push_screen(PacketDetailScreen(self._displayed, row, self._db, self._blacklist))
 
     def action_open_map(self) -> None:
         if not self._displayed:
@@ -1177,7 +1208,7 @@ class MonitorTab(TabPane):
     def _update_map_side(self, row: int) -> None:
         if not self._displayed or row >= len(self._displayed):
             return
-        self.query_one(MapSidePanel).load_packet(self._displayed, row, self._db)
+        self.query_one(MapSidePanel).load_packet(self._displayed, row, self._db, self._blacklist)
 
     def _sync_panel_area(self) -> None:
         """Show #panel_area (and resize handles) based on which panels are open."""

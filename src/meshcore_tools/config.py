@@ -35,6 +35,13 @@ def save_settings(data: dict, config_dir: Path | None = None) -> None:
     path.write_text(_to_toml(data))
 
 
+def get_blacklist(config_dir: Path | None = None) -> list[str]:
+    """Return the node blacklist from settings.toml, or [] if not set."""
+    settings = load_settings(config_dir)
+    val = settings.get("filtering", {}).get("blacklist", [])
+    return [str(x) for x in val] if isinstance(val, list) else []
+
+
 def get_region(config_dir: Path | None = None) -> str | None:
     """Return the saved default region, or None if not set."""
     settings = load_settings(config_dir)
@@ -77,4 +84,6 @@ def _toml_value(v: object) -> str:
     if isinstance(v, str):
         escaped = v.replace("\\", "\\\\").replace('"', '\\"')
         return f'"{escaped}"'
+    if isinstance(v, list):
+        return "[" + ", ".join(_toml_value(i) for i in v) + "]"
     raise TypeError(f"Unsupported TOML value type: {type(v)}")
