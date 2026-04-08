@@ -164,3 +164,13 @@ def test_get_prefilled_empty_public_key_uses_default(tmp_path):
     save_default_password("default_pw", config_dir=tmp_path)
     contact = {"public_key": ""}
     assert get_prefilled_password(contact, config_dir=tmp_path) == "default_pw"
+
+
+def test_save_default_password_with_corrupt_existing_settings(tmp_path):
+    """save_default_password should succeed even if existing settings.toml is invalid TOML."""
+    settings = tmp_path / "settings.toml"
+    settings.write_text("not valid toml ][")
+    settings.chmod(0o600)
+    # Should not raise
+    save_default_password("newpass", config_dir=tmp_path)
+    assert load_default_password(config_dir=tmp_path) == "newpass"

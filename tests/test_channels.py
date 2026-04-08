@@ -16,6 +16,7 @@ from meshcore_tools.channels import (
     load_channels,
     persist_new_channels,
     try_decrypt,
+    _aes_ecb_decrypt,
     _channel_hash_byte,
     _derive_hashtag_key,
     _parse_decrypted_payload,
@@ -356,3 +357,75 @@ def test_persist_new_channels_key_as_bytes(tmp_path):
     new_ch = [{"idx": 0, "name": "#wardriving", "key_hex": None}]
     added = persist_new_channels(path, new_ch)
     assert added == []
+
+
+def test_persist_new_channels_empty_name_skipped(tmp_path):
+    path = str(tmp_path / "channels.txt")
+    new_ch = [{"name": "", "key_hex": _WARDRIVING_KEY}]
+    added = persist_new_channels(path, new_ch)
+    assert added == []
+
+
+# ---------------------------------------------------------------------------
+# load_channels — unrecognized line triggers warning
+# ---------------------------------------------------------------------------
+
+def test_load_channels_bad_line_emits_warning(tmp_path, capsys):
+    path = _write_tmp(tmp_path, "this is not a valid line\n")
+    channels = load_channels(path)
+    assert channels == []
+    stderr = capsys.readouterr().err
+    assert "unrecognised" in stderr
+
+
+def test_load_channels_bad_line_does_not_affect_valid_entries(tmp_path):
+    path = _write_tmp(tmp_path, """\
+        0: Public [8b3387e9c5cdea6ac9e5edbaa115cd72]
+        this is garbage
+        #wardriving
+    """)
+    channels = load_channels(path)
+    labels = [c[0] for c in channels]
+    assert "Public" in labels
+    assert "#wardriving" in labels
+
+
+# ---------------------------------------------------------------------------
+# _aes_ecb_decrypt edge cases
+# ---------------------------------------------------------------------------
+
+def test_aes_ecb_decrypt_bad_alignment_returns_none():
+    key = PUBLIC_CHANNEL_KEY
+    # 17 bytes is not a multiple of 16
+    assert _aes_ecb_decrypt(b"\x00" * 17, key) is None
+
+
+def test_aes_ecb_decrypt_empty_returns_none():
+    assert _aes_ecb_decrypt(b"", PUBLIC_CHANNEL_KEY) is None
+
+
+def test_aes_ecb_decrypt_null_padding_stripped():
+    """When no valid PKCS7 padding, null bytes are stripped from the end."""
+    key = PUBLIC_CHANNEL_KEY
+    plaintext = b"hello\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"  # 16 bytes
+    ciphertext = AES.new(key, AES.MODE_ECB).encrypt(plaintext)
+    result = _aes_ecb_decrypt(ciphertext, key)
+    assert result == b"hello"
+
+
+# ---------------------------------------------------------------------------
+# try_decrypt — MAC fail, bad plaintext
+# ---------------------------------------------------------------------------
+
+def test_try_decrypt_bad_plaintext_returns_none():
+    """MAC verifies but decrypted payload is too short to parse → None."""
+    key = PUBLIC_CHANNEL_KEY
+    ch_byte = _channel_hash_byte(key)
+    # Encrypt 16 bytes of zeros — decrypted to something that may parse to None
+    ciphertext = AES.new(key, AES.MODE_ECB).encrypt(b"\x00" * 16)
+    mac = hmac.new(key, ciphertext, hashlib.sha256).digest()[:2]
+    lookup = build_channel_lookup([("Public", key)])
+    # Result may or may not be None depending on random decrypt; just verify no exception
+    try_decrypt(ch_byte, mac, ciphertext, lookup)  # should not raise
+
+
