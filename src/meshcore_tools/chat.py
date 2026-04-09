@@ -17,11 +17,11 @@ if TYPE_CHECKING:
     from meshcore_tools.companion import CompanionManager
 
 _MAX_MSG_LEN = 133
-_MAX_COMPANION_CHANNELS = 8
+_MAX_COMPANION_CHANNELS = 40
 
 
 class _ImportChannelsScreen(ModalScreen[list[tuple[str, bytes]] | None]):
-    """Modal: choose which channels from channels.txt to push to the companion."""
+    """Modal: choose which channels from secrets.toml to push to the companion."""
 
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
@@ -320,39 +320,33 @@ class ChatTab(TabPane):
             self._action_import_channels()
 
     def _action_import_channels(self) -> None:
-        """Compute the diff vs channels.txt and open the import modal."""
+        """Compute the diff vs secrets.toml channels and open the import modal."""
         companion: CompanionManager | None = getattr(self.app, "companion", None)
         if companion is None or not companion.is_connected:
             self.app.notify("Companion not connected", severity="warning")
             return
 
-        channels_path: str | None = getattr(self.app, "_channels_path", None)
-        if not channels_path:
-            self.app.notify(
-                "No channels file configured (use --channels option)", severity="warning"
-            )
-            return
+        from meshcore_tools.passwords import load_channels_from_secrets
 
-        from meshcore_tools.channels import load_channels
-
-        txt_channels = load_channels(channels_path)
-        if not txt_channels:
-            self.app.notify("No channels found in channels.txt", severity="warning")
+        local_channels = load_channels_from_secrets()
+        if not local_channels:
+            self.app.notify("No channels found in secrets.toml", severity="warning")
             return
 
         companion_names = {ch["name"].lower() for ch in self._channels}
         new_channels = [
-            (name, key) for name, key in txt_channels if name.lower() not in companion_names
+            (name, key) for name, key in local_channels if name.lower() not in companion_names
         ]
 
         if not new_channels:
-            self.app.notify("All channels from channels.txt are already on the companion")
+            self.app.notify("All channels from secrets.toml are already on the companion")
             return
 
         available_slots = _MAX_COMPANION_CHANNELS - len(self._channels)
         if available_slots <= 0:
             self.app.notify(
-                "All 8 companion channel slots are occupied", severity="warning"
+                f"All {_MAX_COMPANION_CHANNELS} companion channel slots are occupied",
+                severity="warning",
             )
             return
 
@@ -383,7 +377,8 @@ class ChatTab(TabPane):
             self.app.notify("Companion not connected", severity="error")
             return
 
-        next_slot = max((ch["idx"] for ch in self._channels), default=-1) + 1
+        occupied = {ch["idx"] for ch in self._channels}
+        next_slot = next(i for i in range(_MAX_COMPANION_CHANNELS) if i not in occupied)
         errors: list[str] = []
         imported = 0
 

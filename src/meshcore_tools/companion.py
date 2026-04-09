@@ -353,7 +353,7 @@ class CompanionManager:
 
     async def _fetch_channels(self) -> None:
         channels: list[dict] = []
-        for idx in range(8):  # meshcore supports up to 8 configured channels
+        for idx in range(40):  # meshcore supports up to 40 configured channels
             result = await self._client.commands.get_channel(idx)
             if result is None or str(result.type) == str(_EventType.ERROR):
                 break
@@ -361,7 +361,7 @@ class CompanionManager:
             logger.debug("get_channel(%d) payload: %s", idx, payload)
             name = payload.get("channel_name", "").rstrip("\x00").strip()
             if not name:
-                name = f"#{idx}"
+                continue  # empty slot, skip
             key_hex = _extract_channel_key_hex(payload)
             ch: dict = {"idx": idx, "name": name}
             if key_hex:

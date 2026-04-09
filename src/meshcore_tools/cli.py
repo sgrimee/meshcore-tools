@@ -1,7 +1,6 @@
 """meshcore-tools — CLI entry point."""
 
 import argparse
-import os
 
 from meshcore_tools.providers.letsmesh_rest import DEFAULT_REGION
 
@@ -43,8 +42,6 @@ def main() -> None:
     monitor_p.add_argument("--region", default=None, metavar="REGION")
     monitor_p.add_argument("--poll", type=int, default=5, metavar="SECONDS",
                            help="polling interval in seconds (default: 5)")
-    monitor_p.add_argument("--channels", metavar="FILE", default=None,
-                           help="channel keys file for decryption (default: channels.txt if present)")
     monitor_p.add_argument("--log-file", metavar="FILE", default=None,
                            help="write logs to FILE in addition to the in-app Logs tab")
 
@@ -67,9 +64,6 @@ def main() -> None:
         # Default (no subcommand) and "monitor" both launch MeshCoreApp
         region = _resolve_region(getattr(args, "region", None))
         poll = getattr(args, "poll", 5)
-        channels = getattr(args, "channels", None)
-        if channels is None and os.path.exists("channels.txt"):
-            channels = "channels.txt"
         log_file = getattr(args, "log_file", None)
         if log_file:
             import logging
@@ -98,7 +92,6 @@ def main() -> None:
             region=region,
             packet_provider=packet_provider,
             poll_interval=poll,
-            channels_path=channels,
         ).run()
 
 

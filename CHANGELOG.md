@@ -8,26 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Store channel keys in `secrets.toml` under `[channels]` table; auto-persist keys received from companion on connect
 - Expandable multi-observer sub-rows in monitor table
 - Add MQTT packet source for monitor tab with observer-aware dedup
 - Show 'Not connected' banner on F2 Channels and F3 Contacts tabs
 - Add node blacklist to filter spurious address-collision nodes
 - Add F4 companion info tab with device info panel and command input
 - Add settings.toml to persist default region
-- Import channels from channels.txt to connected companion
 - Show recent connections expanded by default in ConnectScreen
 - Colour unread dot indicator in tab labels with warning amber
 - Add unread message indicators for channels and DMs
-- Persist companion channel data to channels.txt for packet decryption
 - Save per-repeater passwords with fallback default in config
 - Format JSON command responses as key: value lines
 
 ### Changed
+- Consolidate XDG config files into config.toml and secrets.toml
 - Expand coverage for decoder, db, channels, and passwords
 - Skip code review for PRs authored by claude[bot]
 - Refactor companion command dispatch with shared error helper; remove redundant exception wrapping in set_connected and deduplicate query_one calls
 
+### Removed
+- Remove `--channels` CLI flag; channel keys are now loaded from `secrets.toml` automatically
+
 ### Fixed
+- Fix companion channel fetch to probe up to 40 slots (was 8); skip empty/unnamed slots
+- Fix channel import: use first free slot index to handle gaps; restore slot cap check at 40
 - Unify F4 Companion tab 'Not connected' display with F2/F3 tabs
 - Skip code review for Claude Code-authored PRs
 - Map F4 companion tab commands to binary API calls
@@ -35,8 +40,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Show BLE device name instead of MAC address in recent companion list
 - Show unread dot when message received for selected contact while tab is inactive
 - Recognise channel_secret field and skip all-zero keys in _extract_channel_key_hex
-- Add reload_channels method to MonitorTab and store _channels_path
-- Rename ambiguous variable l to line in test_channels.py
 - Allow bots to trigger claude code review workflow
 - Parse Python dict reprs and improve response formatting
 - Accept bool | None in _on_save callback to satisfy push_screen type overloads

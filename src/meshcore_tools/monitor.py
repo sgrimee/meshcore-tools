@@ -21,7 +21,7 @@ from textual.worker import get_current_worker
 if TYPE_CHECKING:
     from meshcore_tools.providers import PacketProvider
 
-from meshcore_tools.channels import build_channel_lookup, load_channels, try_decrypt
+from meshcore_tools.channels import build_channel_lookup, try_decrypt
 from meshcore_tools.db import is_input_node, learn_from_advert, load_db, resolve_name, resolve_name_filtered, save_db
 from meshcore_tools.decoder import GROUP_TYPES, decode_packet
 from meshcore_tools.map_view import MapSidePanel, PacketMapScreen
@@ -559,15 +559,13 @@ class PacketMonitorApp(App):
         region: str,
         packet_provider: PacketProvider,
         poll_interval: int = 5,
-        channels_path: str | None = None,
     ):
         super().__init__()
         self.region = region
         self.poll_interval = poll_interval
         self._packet_provider = packet_provider
-        self._channels_path = channels_path
-        channels = load_channels(channels_path) if channels_path else []
-        self._channel_lookup = build_channel_lookup(channels)
+        from meshcore_tools.passwords import load_channels_from_secrets
+        self._channel_lookup = build_channel_lookup(load_channels_from_secrets())
         self._db: dict = {"nodes": {}}
         self._seen_ids: set[str] = set()
         self._paused = False
@@ -618,9 +616,9 @@ class PacketMonitorApp(App):
         self._poll_worker()
 
     def reload_channels(self) -> None:
-        """Reload channel lookup from the channels file (called after new entries are appended)."""
-        channels = load_channels(self._channels_path) if self._channels_path else []
-        self._channel_lookup = build_channel_lookup(channels)
+        """Reload channel lookup from secrets.toml (called after new channels are persisted)."""
+        from meshcore_tools.passwords import load_channels_from_secrets
+        self._channel_lookup = build_channel_lookup(load_channels_from_secrets())
 
     @work(thread=True, exclusive=True)
     def _poll_worker(self) -> None:
@@ -1021,15 +1019,13 @@ class MonitorTab(TabPane):
         region: str,
         packet_provider: "PacketProvider",
         poll_interval: int = 5,
-        channels_path: str | None = None,
     ) -> None:
         super().__init__("F1 Monitor", id="tab_monitor")
         self._region = region
         self.poll_interval = poll_interval
         self._packet_provider = packet_provider
-        self._channels_path = channels_path
-        channels = load_channels(channels_path) if channels_path else []
-        self._channel_lookup = build_channel_lookup(channels)
+        from meshcore_tools.passwords import load_channels_from_secrets
+        self._channel_lookup = build_channel_lookup(load_channels_from_secrets())
         self._db: dict = {"nodes": {}}
         self._seen_ids: set[str] = set()
         self._paused = False
@@ -1079,9 +1075,9 @@ class MonitorTab(TabPane):
         self._poll_worker()
 
     def reload_channels(self) -> None:
-        """Reload channel lookup from the channels file (called after new entries are appended)."""
-        channels = load_channels(self._channels_path) if self._channels_path else []
-        self._channel_lookup = build_channel_lookup(channels)
+        """Reload channel lookup from secrets.toml (called after new channels are persisted)."""
+        from meshcore_tools.passwords import load_channels_from_secrets
+        self._channel_lookup = build_channel_lookup(load_channels_from_secrets())
 
     @work(thread=True, exclusive=True)
     def _poll_worker(self) -> None:
@@ -1524,7 +1520,6 @@ def run_monitor(
     region: str,
     packet_provider: "PacketProvider",
     poll_interval: int = 5,
-    channels_path: str | None = None,
 ) -> None:
     """Launch MeshCoreApp with the Monitor tab active (companion tabs optional)."""
     from meshcore_tools.app import MeshCoreApp
@@ -1532,5 +1527,4 @@ def run_monitor(
         region=region,
         packet_provider=packet_provider,
         poll_interval=poll_interval,
-        channels_path=channels_path,
     ).run()

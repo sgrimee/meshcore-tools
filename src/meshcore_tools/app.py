@@ -77,13 +77,11 @@ class MeshCoreApp(App):
         region: str,
         packet_provider: "PacketProvider",
         poll_interval: int = 5,
-        channels_path: str | None = None,
     ) -> None:
         super().__init__()
         self._region = region
         self._packet_provider = packet_provider
         self._poll_interval = poll_interval
-        self._channels_path = channels_path
         self.companion: CompanionManager | None = None
         self._log_panel_open: bool = False
 
@@ -94,7 +92,6 @@ class MeshCoreApp(App):
                 region=self._region,
                 packet_provider=self._packet_provider,
                 poll_interval=self._poll_interval,
-                channels_path=self._channels_path,
             )
             if COMPANION_AVAILABLE:
                 yield ChatTab()
@@ -248,26 +245,34 @@ class MeshCoreApp(App):
             self.query_one(ChatTab).populate_channels(message.channels)
         except Exception:
             pass
-        if self._channels_path:
-            from meshcore_tools.channels import persist_new_channels
-            import logging as _logging
-            _log = _logging.getLogger(__name__)
-            try:
-                newly_added = persist_new_channels(self._channels_path, message.channels)
-                if newly_added:
-                    names = ", ".join(name for name, _ in newly_added)
-                    _log.info(
-                        "Persisted %d new channel(s) to %s: %s",
-                        len(newly_added),
-                        self._channels_path,
-                        names,
-                    )
+        import logging as _logging
+        _log = _logging.getLogger(__name__)
+        try:
+            from meshcore_tools.passwords import persist_channel_to_secrets
+            newly_added: list[tuple[str, bytes]] = []
+            for ch in message.channels:
+                key_hex = ch.get("key_hex") or ""
+                name = ch.get("name") or ""
+                if name and len(key_hex) == 32:
                     try:
-                        self.query_one(MonitorTab).reload_channels()
-                    except Exception:
+                        key_bytes = bytes.fromhex(key_hex)
+                        if persist_channel_to_secrets(name, key_bytes):
+                            newly_added.append((name, key_bytes))
+                    except ValueError:
                         pass
-            except Exception as exc:
-                _log.warning("Failed to persist channels: %s", exc)
+            if newly_added:
+                names = ", ".join(name for name, _ in newly_added)
+                _log.info(
+                    "Persisted %d new channel(s) to secrets.toml: %s",
+                    len(newly_added),
+                    names,
+                )
+                try:
+                    self.query_one(MonitorTab).reload_channels()
+                except Exception:
+                    pass
+        except Exception as exc:
+            _log.warning("Failed to persist channels: %s", exc)
 
     def _update_tab_labels(self) -> None:
         """Update F2/F3 tab labels to reflect current unread counts."""

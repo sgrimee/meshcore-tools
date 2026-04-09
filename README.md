@@ -89,7 +89,7 @@ The default region is `LUX`. Pass `--region YOUR_REGION` or set it once in `conf
 
 ```
 meshcore-tools                                      launch full TUI (same as `monitor`)
-meshcore-tools monitor [--region R] [--poll N] [--channels FILE] [--log-file FILE]
+meshcore-tools monitor [--region R] [--poll N] [--log-file FILE]
 meshcore-tools nodes update [--region REGION]       refresh node database
 meshcore-tools nodes lookup <hex_prefix>            find node by key prefix (1+ hex chars)
 meshcore-tools nodes list [--by-key]                list all nodes
@@ -99,7 +99,6 @@ meshcore-tools nodes list [--by-key]                list all nodes
 |---|---|---|
 | `--region` | saved or `LUX` | Region filter for the letsmesh API |
 | `--poll` | `5` (letsmesh) / `1` (MQTT) | Polling interval in seconds |
-| `--channels` | `channels.txt` if present | Channel key file for decryption |
 | `--log-file` | — | Write debug log to a file in addition to the in-app panel |
 
 ### Examples
@@ -153,32 +152,22 @@ meshcore-tools
 
 ### Channel decryption
 
-The monitor can decrypt GroupText messages if you supply a channels file with the channel keys. Create `channels.txt` in the working directory (gitignored) by appending the output of `get_channels` from [meshcore-cli](https://github.com/ripplingwaves/meshcore-cli):
+The monitor decrypts GroupText messages using channel keys stored in `~/.config/meshcore-tools/secrets.toml` under a `[channels]` table:
 
-```sh
-just get-channels               # uses first available device
-just get-channels /dev/ttyUSB0  # specify device explicitly
+```toml
+[channels]
+"Public" = "8b3387e9c5cdea6ac9e5edbaa115cd72"
+"#wardriving" = "e3c26491e9cd321e3a6be50d57d54acf"
+"MyChannel" = "52d21b5e68a130279cce6b64c0f8bcd4"
 ```
 
-The output is used directly — no editing required:
+Each entry maps a channel name to its 32-char hex AES-128 key. Hashtag channels with no explicit key have their key derived automatically from the channel name — you can omit the value or leave it empty.
 
-```
-0: Public [8b3387e9c5cdea6ac9e5edbaa115cd72]
-1: #wardriving [e3c26491e9cd321e3a6be50d57d54acf]
-2: #chaosstuff [b53025e867806e0b5e241adc0d47358b]
-```
+If you have a connected companion device, the easiest way to populate this file is to connect and let the app auto-sync: channel keys received from the device are persisted to `secrets.toml` automatically on connect. You can also push your local keys to the device from the **F2 Channels tab** using the **Import channels** button.
 
-Hashtag channels may also be listed without a key (the key is derived automatically from the channel name):
+When a message is successfully decrypted, the sender name and message text are shown in the detail panel instead of "encrypted".
 
-```
-#luxembourg
-```
-
-The file is loaded automatically if it exists as `channels.txt`, or you can specify a path with `--channels FILE`. When a message is successfully decrypted, the sender name and message text are shown in the detail panel instead of "encrypted".
-
-If you have a connected device, you can also import your local `channels.txt` keys directly to it from the **F2 Channels tab** using the Import button.
-
-See `channels.txt.sample` for a template.
+See `secrets.toml.sample` for an annotated template.
 
 ## Companion features
 
@@ -201,7 +190,7 @@ Recent connections are shown expanded by default. The last successful connection
 - Channel list on the left, message log and input on the right
 - Use `←` / `→` to switch channels
 - Send messages up to 133 characters
-- **Import channels** button pushes your local `channels.txt` keys to the device
+- **Import channels** button pushes keys from `secrets.toml` to the device
 - New incoming messages trigger an amber unread dot on the tab label
 
 ### F3 Contacts tab
@@ -221,6 +210,7 @@ Passwords are stored with `600` permissions in `~/.config/meshcore-tools/secrets
 
 - `default_password` — fallback used for all logins
 - `[passwords]` table — per-repeater passwords keyed by public key; take precedence over the default
+- `[channels]` table — channel keys for GroupText decryption; auto-populated on companion connect
 
 Saved passwords are pre-filled in the login dialog automatically.
 
@@ -248,13 +238,17 @@ topic = "meshcore/raw"
 # password = "..."
 ```
 
-**`secrets.toml`** (always `600` permissions) — login passwords:
+**`secrets.toml`** (always `600` permissions) — login passwords and channel keys:
 
 ```toml
 default_password = "hunter2"
 
 [passwords]
 "abcdef1234..." = "repeater-specific-pw"
+
+[channels]
+"Public" = "8b3387e9c5cdea6ac9e5edbaa115cd72"
+"#wardriving" = "e3c26491e9cd321e3a6be50d57d54acf"
 ```
 
 | Key | Default | Description |
