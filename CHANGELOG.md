@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Expandable multi-observer sub-rows in monitor table
+- Add MQTT packet source for monitor tab with observer-aware dedup
 - Show 'Not connected' banner on F2 Channels and F3 Contacts tabs
 - Add node blacklist to filter spurious address-collision nodes
 - Add F4 companion info tab with device info panel and command input
@@ -21,10 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Format JSON command responses as key: value lines
 
 ### Changed
+- Expand coverage for decoder, db, channels, and passwords
 - Skip code review for PRs authored by claude[bot]
 - Refactor companion command dispatch with shared error helper; remove redundant exception wrapping in set_connected and deduplicate query_one calls
 
 ### Fixed
+- Unify F4 Companion tab 'Not connected' display with F2/F3 tabs
 - Skip code review for Claude Code-authored PRs
 - Map F4 companion tab commands to binary API calls
 - Resolve BLE device names for legacy history entries
