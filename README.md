@@ -51,6 +51,21 @@ An unofficial terminal app for [MeshCore](https://meshcore.dev) LoRa mesh networ
 
 Requires [uv](https://docs.astral.sh/uv/).
 
+### Install from git (no repo clone needed)
+
+```sh
+# Monitor only — no MeshCore device needed
+uv tool install git+https://github.com/sgrimee/meshcore-tools
+
+# With companion support (F2 Channels, F3 Contacts, F4 Device info)
+uv tool install "meshcore-tools[companion] @ git+https://github.com/sgrimee/meshcore-tools"
+
+# All features (companion + map rendering + MQTT source)
+uv tool install "meshcore-tools[companion,map,mqtt] @ git+https://github.com/sgrimee/meshcore-tools"
+```
+
+### Install from a local clone
+
 ```sh
 # Monitor only — no MeshCore device needed
 uv tool install .
