@@ -4,6 +4,8 @@
 
 from meshcore_tools.config import (
     get_blacklist,
+    get_mqtt_config,
+    get_packet_source_type,
     get_region,
     load_config,
     save_config,
@@ -140,3 +142,55 @@ def test_aot_round_trip(tmp_path):
     assert len(loaded["connection"]["history"]) == 2
     assert loaded["connection"]["history"][0]["host"] == "1.2.3.4"
     assert loaded["connection"]["history"][1]["device"] == "/dev/ttyUSB0"
+
+
+# ---------------------------------------------------------------------------
+# get_packet_source_type
+# ---------------------------------------------------------------------------
+
+def test_get_packet_source_type_default(tmp_path):
+    assert get_packet_source_type(tmp_path) == "letsmesh"
+
+
+def test_get_packet_source_type_mqtt(tmp_path):
+    (tmp_path / "config.toml").write_text('[packet_source]\ntype = "mqtt"\n')
+    assert get_packet_source_type(tmp_path) == "mqtt"
+
+
+def test_get_packet_source_type_letsmesh_explicit(tmp_path):
+    (tmp_path / "config.toml").write_text('[packet_source]\ntype = "letsmesh"\n')
+    assert get_packet_source_type(tmp_path) == "letsmesh"
+
+
+# ---------------------------------------------------------------------------
+# get_mqtt_config
+# ---------------------------------------------------------------------------
+
+def test_get_mqtt_config_defaults(tmp_path):
+    cfg = get_mqtt_config(tmp_path)
+    assert cfg["broker"] == "localhost"
+    assert cfg["port"] == 1883
+    assert cfg["topic"] == "meshcore/raw"
+    assert "username" not in cfg
+    assert "password" not in cfg
+
+
+def test_get_mqtt_config_all_fields(tmp_path):
+    (tmp_path / "config.toml").write_text(
+        '[mqtt]\nbroker = "mqtt.example.com"\nport = 8883\n'
+        'topic = "mesh/raw"\nusername = "alice"\npassword = "s3cr3t"\n'
+    )
+    cfg = get_mqtt_config(tmp_path)
+    assert cfg["broker"] == "mqtt.example.com"
+    assert cfg["port"] == 8883
+    assert cfg["topic"] == "mesh/raw"
+    assert cfg["username"] == "alice"
+    assert cfg["password"] == "s3cr3t"
+
+
+def test_get_mqtt_config_partial_fields(tmp_path):
+    (tmp_path / "config.toml").write_text('[mqtt]\nbroker = "broker.local"\n')
+    cfg = get_mqtt_config(tmp_path)
+    assert cfg["broker"] == "broker.local"
+    assert cfg["port"] == 1883
+    assert "username" not in cfg

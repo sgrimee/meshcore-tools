@@ -251,6 +251,29 @@ def _build_detail_text(packet: dict, db: dict) -> str:
         f"[dim]ID:[/dim]         {p.get('id', '-')}",
         f"[dim]Created:[/dim]    {fmt_ts(p.get('created_at', ''))}",
     ]
+
+    obs_idx = p.get("_observer_index", 0)
+    obs_total = p.get("_observer_total", 0)
+    observers = p.get("_observers") or []
+    n_obs = len(observers)
+    if obs_idx > 0 and obs_total > 0:
+        # Sub-row view: show which observation this is.
+        lines.append("")
+        lines.append(f"[dim]Observation {obs_idx + 1} of {obs_total}[/dim]")
+    elif n_obs > 1:
+        # Primary row with multiple observers: show the full observers table.
+        lines.append("")
+        lines.append(f"[bold]Observers[/bold] ({n_obs}):")
+        for i, obs in enumerate(observers):
+            name = obs.get("origin") or (obs.get("origin_id") or "")[:12] or "-"
+            ts = fmt_ts(obs.get("heard_at") or "")
+            snr_s = f"{obs['snr']:.1f}" if obs.get("snr") is not None else "-"
+            rssi_s = str(obs["rssi"]) if obs.get("rssi") is not None else "-"
+            primary = "  [dim](primary)[/dim]" if i == 0 else ""
+            lines.append(
+                f"  [dim]{i + 1}.[/dim] {name:<20}  {ts}  SNR {snr_s:>5}  RSSI {rssi_s:>5}{primary}"
+            )
+
     return "\n".join(lines)
 
 
@@ -615,11 +638,30 @@ class PacketMonitorApp(App):
 
     def _ingest_packets(self, packets: list[dict]) -> None:
         region = self.region.upper()
-        new = [
-            p for p in packets
-            if p.get("id") not in self._seen_ids
-            and region in [r.upper() for r in (p.get("regions") or [])]
-        ]
+        # Separate duplicates (same id, new observer) from genuinely new packets.
+        # new_ids tracks IDs already queued as new in this batch to handle intra-batch dups.
+        new: list[dict] = []
+        new_ids: set[str] = set()
+        duplicate_ids: set[str] = set()
+        for p in packets:
+            pid = p.get("id")
+            if pid in self._seen_ids or pid in new_ids:
+                if pid in self._packets_by_id:
+                    obs_entry = {k: p.get(k) for k in ("origin_id", "origin", "snr", "rssi", "heard_at")}
+                    self._packets_by_id[pid]["_observers"].append(obs_entry)
+                    duplicate_ids.add(pid)
+            elif region in [r.upper() for r in (p.get("regions") or [])]:
+                new.append(p)
+                if pid:
+                    new_ids.add(pid)
+
+        # Refresh detail side-panel for any packet that gained a new observer.
+        if duplicate_ids and self._detail_panel_open and self._displayed:
+            for row, p in enumerate(self._displayed):
+                if p.get("id") in duplicate_ids:
+                    self._update_detail_side(row)
+                    break
+
         if not new:
             self._set_status(None)
             return
@@ -629,10 +671,13 @@ class PacketMonitorApp(App):
             pkt_dec = decode_packet(p.get("raw_data", "") or "")
             p["_path"] = pkt_dec.get("path") or []
             p["_decoded"] = pkt_dec
+            p.setdefault("payload_type", pkt_dec.get("payload_type", ""))
             decoded_payload = pkt_dec.get("decoded") or {}
             p["_src_hash"] = decoded_payload.get("src_hash", "")
             p["_route_type"] = pkt_dec.get("route_type", "")
             p["_path_hop_size"] = pkt_dec.get("path_hop_size", 1)
+            # Initialise observer list with this (first) observation.
+            p["_observers"] = [{k: p.get(k) for k in ("origin_id", "origin", "snr", "rssi", "heard_at")}]
             # For Advert packets, learn node identity and use full key as src
             if pkt_dec.get("payload_type") == "Advert" and decoded_payload.get("public_key"):
                 pub = decoded_payload["public_key"]
@@ -711,6 +756,8 @@ class PacketMonitorApp(App):
             except Exception:
                 time_str = heard[:8]
             node = p.get("origin") or resolve_name(p.get("origin_id", ""), self._db)
+            n_obs = len(p.get("_observers") or [])
+            node_cell = Text.from_markup(node + (f" [dim](+{n_obs - 1})[/dim]" if n_obs > 1 else ""))
             ptype = format_payload_type(p.get("payload_type", ""))
             snr = f"{p['snr']:.1f}" if p.get("snr") is not None else "-"
             rssi = str(p.get("rssi", "-"))
@@ -732,7 +779,7 @@ class PacketMonitorApp(App):
             else:
                 path_cell = Text.from_markup(path)
                 row_height = 1
-            table.add_row(time_str, node, ptype, snr, rssi, path_cell, height=row_height, key=p["id"])
+            table.add_row(time_str, node_cell, ptype, snr, rssi, path_cell, height=row_height, key=p["id"])
         # Restore cursor: pin to previous packet (no-follow) or stay at 0 (follow)
         target_row = 0
         if pinned_id:
@@ -996,6 +1043,8 @@ class MonitorTab(TabPane):
         self._map_panel_open: bool = False
         self._follow: bool = False
         self._layout_bottom: bool = False
+        self._expanded: set[str] = set()
+        self._row_keys: list[str] = []
         from meshcore_tools.config import get_blacklist
         self._blacklist: list[str] = get_blacklist()
 
@@ -1050,11 +1099,45 @@ class MonitorTab(TabPane):
 
     def _ingest_packets(self, packets: list[dict]) -> None:
         region = self._region.upper()
-        new = [
-            p for p in packets
-            if p.get("id") not in self._seen_ids
-            and region in [r.upper() for r in (p.get("regions") or [])]
-        ]
+        # Separate duplicates (same id, new observer) from genuinely new packets.
+        # new_ids tracks IDs already queued as new in this batch to handle intra-batch dups.
+        new: list[dict] = []
+        new_ids: set[str] = set()
+        duplicate_ids: set[str] = set()
+        for p in packets:
+            pid = p.get("id")
+            if pid in self._seen_ids or pid in new_ids:
+                if pid in self._packets_by_id:
+                    obs_dec = decode_packet(p.get("raw_data", "") or "")
+                    obs_entry = {
+                        "origin_id": p.get("origin_id"),
+                        "origin": p.get("origin"),
+                        "snr": p.get("snr"),
+                        "rssi": p.get("rssi"),
+                        "heard_at": p.get("heard_at"),
+                        "raw_data": p.get("raw_data", ""),
+                        "_path": obs_dec.get("path") or [],
+                        "_decoded": obs_dec,
+                        "_src_hash": (obs_dec.get("decoded") or {}).get("src_hash", ""),
+                        "_route_type": obs_dec.get("route_type", ""),
+                        "_path_hop_size": obs_dec.get("path_hop_size", 1),
+                    }
+                    self._packets_by_id[pid]["_observers"].append(obs_entry)
+                    duplicate_ids.add(pid)
+            elif region in [r.upper() for r in (p.get("regions") or [])]:
+                new.append(p)
+                if pid:
+                    new_ids.add(pid)
+
+        # Refresh detail side-panel for any packet that gained a new observer.
+        if duplicate_ids and self._detail_panel_open and self._row_keys:
+            table = self.query_one("#packets", DataTable)
+            cur_key = self._row_keys[table.cursor_row] if table.cursor_row < len(self._row_keys) else None
+            if cur_key and (cur_key in duplicate_ids or cur_key.split("::")[0] in duplicate_ids):
+                view = self._view_for_key(cur_key)
+                if view is not None:
+                    self.query_one("#detail_content", Static).update(_build_detail_text(view, self._db))
+
         if not new:
             self._set_status(None)
             return
@@ -1064,10 +1147,25 @@ class MonitorTab(TabPane):
             pkt_dec = decode_packet(p.get("raw_data", "") or "")
             p["_path"] = pkt_dec.get("path") or []
             p["_decoded"] = pkt_dec
+            p.setdefault("payload_type", pkt_dec.get("payload_type", ""))
             decoded_payload = pkt_dec.get("decoded") or {}
             p["_src_hash"] = decoded_payload.get("src_hash", "")
             p["_route_type"] = pkt_dec.get("route_type", "")
             p["_path_hop_size"] = pkt_dec.get("path_hop_size", 1)
+            # Initialise observer list with this (first) observation, including decoded path fields.
+            p["_observers"] = [{
+                "origin_id": p.get("origin_id"),
+                "origin": p.get("origin"),
+                "snr": p.get("snr"),
+                "rssi": p.get("rssi"),
+                "heard_at": p.get("heard_at"),
+                "raw_data": p.get("raw_data", ""),
+                "_path": pkt_dec.get("path") or [],
+                "_decoded": pkt_dec,
+                "_src_hash": decoded_payload.get("src_hash", ""),
+                "_route_type": pkt_dec.get("route_type", ""),
+                "_path_hop_size": pkt_dec.get("path_hop_size", 1),
+            }]
             if pkt_dec.get("payload_type") == "Advert" and decoded_payload.get("public_key"):
                 pub = decoded_payload["public_key"]
                 name = decoded_payload.get("name") or pub[:8]
@@ -1126,89 +1224,203 @@ class MonitorTab(TabPane):
 
         return True
 
+    def _observer_view(self, pid: str, obs_idx: int) -> dict:
+        """Return a packet view dict for a specific observer index."""
+        primary = self._packets_by_id[pid]
+        if obs_idx == 0:
+            return primary
+        obs = primary["_observers"][obs_idx]
+        view = dict(primary)
+        for k in ("origin_id", "origin", "snr", "rssi", "heard_at", "raw_data",
+                  "_path", "_decoded", "_src_hash", "_route_type", "_path_hop_size"):
+            if k in obs:
+                view[k] = obs[k]
+        view["_observer_index"] = obs_idx
+        view["_observer_total"] = len(primary["_observers"])
+        return view
+
+    def _view_for_key(self, key: str) -> dict | None:
+        """Return the packet view dict for a row key (parent or sub-row)."""
+        if "::" in key:
+            pid, idx_s = key.rsplit("::", 1)
+            try:
+                return self._observer_view(pid, int(idx_s))
+            except (KeyError, IndexError, ValueError):
+                return None
+        return self._packets_by_id.get(key)
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Toggle expand/collapse when Enter is pressed on a multi-observer parent row."""
+        row = event.cursor_row
+        if row >= len(self._row_keys):
+            return
+        key = self._row_keys[row]
+        if "::" in key:
+            return  # sub-row: do nothing on Enter
+        p = self._packets_by_id.get(key)
+        if p and len(p.get("_observers") or []) > 1:
+            if key in self._expanded:
+                self._expanded.discard(key)
+            else:
+                self._expanded.add(key)
+            self._rebuild_table()
+
+    def _add_packet_row(self, table: DataTable, view: dict, row_key: str,
+                        node_cell: "Text", wrap_width: int) -> None:
+        """Add one packet row (parent or sub-row) to the table and _row_keys."""
+        heard = view.get("heard_at", "")
+        try:
+            dt = datetime.fromisoformat(heard.replace("Z", "+00:00"))
+            time_str = dt.astimezone().strftime("%H:%M:%S")
+        except Exception:
+            time_str = heard[:8]
+        ptype = format_payload_type(view.get("payload_type", ""))
+        snr = f"{view['snr']:.1f}" if view.get("snr") is not None else "-"
+        rssi = str(view.get("rssi", "-"))
+        raw_path = view.get("_path") or []
+        decrypted = view.get("_decrypted") or {}
+        src_display = decrypted.get("sender", "") or view.get("_src_hash", "")
+        path = format_path(raw_path, self._db, resolve=self._resolve_path,
+                           src_hash=src_display,
+                           route_type=view.get("_route_type", ""),
+                           hop_size=view.get("_path_hop_size", 1),
+                           ptype=view.get("payload_type", ""),
+                           blacklist=self._blacklist)
+        if self._wrap_path:
+            lines = textwrap.wrap(path, width=max(20, wrap_width)) or [path]
+            path_cell = Text.from_markup("\n".join(lines))
+            row_height = len(lines)
+        else:
+            path_cell = Text.from_markup(path)
+            row_height = 1
+        table.add_row(time_str, node_cell, ptype, snr, rssi, path_cell,
+                      height=row_height, key=row_key)
+        self._row_keys.append(row_key)
+
     def _rebuild_table(self) -> None:
         table = self.query_one("#packets", DataTable)
-        pinned_id: str | None = None
-        if not self._follow and self._displayed:
+        # Capture pinned row key before clearing.
+        pinned_key: str | None = None
+        if not self._follow and self._row_keys:
             cr = table.cursor_row
-            if cr < len(self._displayed):
-                pinned_id = self._displayed[cr].get("id")
+            if cr < len(self._row_keys):
+                pinned_key = self._row_keys[cr]
         table.clear()
+        self._row_keys = []
         self._displayed = [p for p in self._all_packets if self._packet_matches(p)]
+        wrap_width = self.app.size.width - 58 if self._wrap_path else 0
         for p in self._displayed:
-            heard = p.get("heard_at", "")
-            try:
-                dt = datetime.fromisoformat(heard.replace("Z", "+00:00"))
-                time_str = dt.astimezone().strftime("%H:%M:%S")
-            except Exception:
-                time_str = heard[:8]
+            pid = p["id"]
+            n_obs = len(p.get("_observers") or [])
+            expandable = n_obs > 1
+            expanded = pid in self._expanded
             node = p.get("origin") or resolve_name(p.get("origin_id", ""), self._db)
-            ptype = format_payload_type(p.get("payload_type", ""))
-            snr = f"{p['snr']:.1f}" if p.get("snr") is not None else "-"
-            rssi = str(p.get("rssi", "-"))
-            raw_path = p.get("_path") or []
-            decrypted = p.get("_decrypted") or {}
-            src_display = decrypted.get("sender", "") or p.get("_src_hash", "")
-            path = format_path(raw_path, self._db, resolve=self._resolve_path,
-                               src_hash=src_display,
-                               route_type=p.get("_route_type", ""),
-                               hop_size=p.get("_path_hop_size", 1),
-                               ptype=p.get("payload_type", ""),
-                               blacklist=self._blacklist)
-            if self._wrap_path:
-                wrap_width = max(20, self.app.size.width - 58)
-                lines = textwrap.wrap(path, width=wrap_width) or [path]
-                path_cell = Text.from_markup("\n".join(lines))
-                row_height = len(lines)
+            if expandable and expanded:
+                node_markup = f"[dim]▼[/dim] {node}"
+            elif expandable:
+                node_markup = f"[dim]▶[/dim] {node} [dim]({n_obs} obs)[/dim]"
             else:
-                path_cell = Text.from_markup(path)
-                row_height = 1
-            table.add_row(time_str, node, ptype, snr, rssi, path_cell, height=row_height, key=p["id"])
+                node_markup = node
+            node_cell = Text.from_markup(node_markup)
+            self._add_packet_row(table, p, pid, node_cell, wrap_width)
+            if expanded:
+                for i in range(1, n_obs):
+                    sub_view = self._observer_view(pid, i)
+                    sub_node = sub_view.get("origin") or resolve_name(
+                        sub_view.get("origin_id", ""), self._db)
+                    sub_node_cell = Text.from_markup(f"  [dim]↳[/dim] {sub_node}")
+                    self._add_packet_row(table, sub_view, f"{pid}::{i}", sub_node_cell, wrap_width)
+
+        # Restore cursor by key.
         target_row = 0
-        if pinned_id:
-            for i, p in enumerate(self._displayed):
-                if p.get("id") == pinned_id:
-                    target_row = i
-                    break
+        if pinned_key:
+            if pinned_key in self._row_keys:
+                target_row = self._row_keys.index(pinned_key)
+            elif "::" in pinned_key:
+                parent_key = pinned_key.split("::")[0]
+                if parent_key in self._row_keys:
+                    target_row = self._row_keys.index(parent_key)
         if target_row > 0:
             table.move_cursor(row=target_row)
-        if self._displayed:
-            if self._detail_panel_open:
-                self._update_detail_side(target_row)
-            if self._map_panel_open:
-                self._update_map_side(target_row)
+        # Update open side panels.
+        if self._row_keys:
+            target_key = self._row_keys[target_row]
+            view = self._view_for_key(target_key)
+            if view is not None:
+                if self._detail_panel_open:
+                    self.query_one("#detail_content", Static).update(
+                        _build_detail_text(view, self._db))
+                if self._map_panel_open:
+                    self._update_map_side_view(view)
 
     def action_open_detail(self) -> None:
-        if not self._displayed:
+        if not self._row_keys:
             return
         row = self.query_one("#packets", DataTable).cursor_row
-        self.app.push_screen(PacketDetailScreen(self._displayed, row, self._db, self._blacklist))
+        if row >= len(self._row_keys):
+            return
+        key = self._row_keys[row]
+        if "::" in key:
+            pid, idx_s = key.rsplit("::", 1)
+            primary = self._packets_by_id.get(pid)
+            if primary is None:
+                return
+            views = [self._observer_view(pid, i) for i in range(len(primary["_observers"]))]
+            self.app.push_screen(PacketDetailScreen(views, int(idx_s), self._db, self._blacklist))
+        else:
+            disp_idx = next((i for i, p in enumerate(self._displayed) if p.get("id") == key), 0)
+            self.app.push_screen(PacketDetailScreen(self._displayed, disp_idx, self._db, self._blacklist))
 
     def action_open_map(self) -> None:
-        if not self._displayed:
+        if not self._row_keys:
             return
         row = self.query_one("#packets", DataTable).cursor_row
-        self.app.push_screen(PacketMapScreen(self._displayed, row, self._db))
+        if row >= len(self._row_keys):
+            return
+        key = self._row_keys[row]
+        if "::" in key:
+            pid, idx_s = key.rsplit("::", 1)
+            primary = self._packets_by_id.get(pid)
+            if primary is None:
+                return
+            views = [self._observer_view(pid, i) for i in range(len(primary["_observers"]))]
+            self.app.push_screen(PacketMapScreen(views, int(idx_s), self._db))
+        else:
+            disp_idx = next((i for i, p in enumerate(self._displayed) if p.get("id") == key), 0)
+            self.app.push_screen(PacketMapScreen(self._displayed, disp_idx, self._db))
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         row = event.cursor_row
-        if not self._displayed or row >= len(self._displayed):
+        if row >= len(self._row_keys):
+            return
+        key = self._row_keys[row]
+        view = self._view_for_key(key)
+        if view is None:
             return
         if self._detail_panel_open:
-            self._update_detail_side(row)
+            self.query_one("#detail_content", Static).update(_build_detail_text(view, self._db))
         if self._map_panel_open:
-            self._update_map_side(row)
+            self._update_map_side_view(view)
 
     def _update_detail_side(self, row: int) -> None:
-        if not self._displayed or row >= len(self._displayed):
+        """Update detail panel for a given table row index."""
+        if row >= len(self._row_keys):
             return
-        p = self._displayed[row]
-        self.query_one("#detail_content", Static).update(_build_detail_text(p, self._db))
+        view = self._view_for_key(self._row_keys[row])
+        if view is not None:
+            self.query_one("#detail_content", Static).update(_build_detail_text(view, self._db))
 
     def _update_map_side(self, row: int) -> None:
-        if not self._displayed or row >= len(self._displayed):
+        if row >= len(self._row_keys):
             return
-        self.query_one(MapSidePanel).load_packet(self._displayed, row, self._db, self._blacklist)
+        view = self._view_for_key(self._row_keys[row])
+        if view is not None:
+            self._update_map_side_view(view)
+
+    def _update_map_side_view(self, view: dict) -> None:
+        """Update map panel with a specific packet view (primary or sub-row)."""
+        # MapSidePanel.load_packet expects a list + index; wrap the single view.
+        self.query_one(MapSidePanel).load_packet([view], 0, self._db, self._blacklist)
 
     def _sync_panel_area(self) -> None:
         """Show #panel_area (and resize handles) based on which panels are open."""
@@ -1262,6 +1474,8 @@ class MonitorTab(TabPane):
         self._displayed = []
         self._seen_ids = set()
         self._packets_by_id = {}
+        self._expanded = set()
+        self._row_keys = []
         self.query_one("#packets", DataTable).clear()
         self.query_one("#detail_content", Static).update("")
         self.query_one(MapSidePanel).clear()
