@@ -1,0 +1,25 @@
+# meshcore-tools configuration
+# Copy to ~/.config/meshcore-tools/config.toml and edit for your setup.
+# All keys are optional — the app uses sensible defaults when absent.
+
+[general]
+# Default region for the letsmesh API and node database updates.
+# Can also be set with the --region CLI flag (saved automatically on first use).
+region = "LUX"
+
+[filtering]
+# Node names or public-key prefixes to hide in the monitor.
+# Useful for suppressing address-collision ghosts or noisy nodes.
+blacklist = []
+
+[packet_source]
+# Packet source for the monitor tab: "letsmesh" (default) or "mqtt".
+type = "letsmesh"
+
+# MQTT settings — only used when packet_source.type = "mqtt"
+[mqtt]
+broker = "localhost"
+port = 1883
+topic = "meshcore/raw"
+# username = "..."
+# password = "..."

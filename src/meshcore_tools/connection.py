@@ -19,14 +19,13 @@ from textual import work
 
 import serial.tools.list_ports
 
+from meshcore_tools.config import _default_config_dir, load_config, save_config
+
 try:
     from bleak import BleakScanner
     _BLEAK_AVAILABLE = True
 except ImportError:
     _BLEAK_AVAILABLE = False
-
-
-_DEFAULT_CONFIG_DIR = Path.home() / ".config" / "meshcore-tools"
 
 
 @dataclass
@@ -44,31 +43,35 @@ class ConnectionConfig:
     ble_device: object | None = None
 
 
-def load_connection_config(config_dir: Path = _DEFAULT_CONFIG_DIR) -> ConnectionConfig | None:
-    """Return stored config or None if the file does not exist."""
-    path = config_dir / "connection.json"
-    if not path.exists():
+def load_connection_config(config_dir: Path | None = None) -> ConnectionConfig | None:
+    """Return stored connection config or None if absent."""
+    if config_dir is None:
+        config_dir = _default_config_dir()
+    conn = load_config(config_dir).get("connection", {})
+    if not conn.get("type"):
         return None
-    data = json.loads(path.read_text())
     return ConnectionConfig(
-        type=data.get("type", "tcp"),
-        host=data.get("host"),
-        port=data.get("port"),
-        device=data.get("device"),
-        ble_name=data.get("ble_name"),
-        ble_address=data.get("ble_address"),
-        ble_pin=data.get("ble_pin"),
+        type=conn["type"],
+        host=conn.get("host"),
+        port=conn.get("port"),
+        device=conn.get("device"),
+        ble_name=conn.get("ble_name"),
+        ble_address=conn.get("ble_address"),
+        ble_pin=conn.get("ble_pin"),
     )
 
 
 def save_connection_config(
-    config: ConnectionConfig, config_dir: Path = _DEFAULT_CONFIG_DIR
+    config: ConnectionConfig, config_dir: Path | None = None
 ) -> None:
-    """Persist config as JSON, creating parent directories as needed."""
-    config_dir.mkdir(parents=True, exist_ok=True)
-    path = config_dir / "connection.json"
-    data = {k: v for k, v in asdict(config).items() if v is not None and k != "ble_device"}
-    path.write_text(json.dumps(data, indent=2))
+    """Persist connection config to config.toml, creating parent directories as needed."""
+    if config_dir is None:
+        config_dir = _default_config_dir()
+    data = load_config(config_dir)
+    data["connection"] = {
+        k: v for k, v in asdict(config).items() if v is not None and k != "ble_device"
+    }
+    save_config(data, config_dir)
     save_connection_history(config, config_dir)
 
 
@@ -83,18 +86,21 @@ def _config_key(c: ConnectionConfig) -> tuple[str, str | None, int | None, str |
 
 
 def save_connection_history(
-    config: ConnectionConfig, config_dir: Path = _DEFAULT_CONFIG_DIR
+    config: ConnectionConfig, config_dir: Path | None = None
 ) -> None:
     """Prepend config to the recent-connections list, deduplicating by identity."""
+    if config_dir is None:
+        config_dir = _default_config_dir()
     existing = load_connection_history(config_dir)
     deduped = [h for h in existing if _config_key(h) != _config_key(config)]
     history = ([config] + deduped)[:_HISTORY_MAX]
-    config_dir.mkdir(parents=True, exist_ok=True)
-    data = [
+    serialized = [
         {k: v for k, v in asdict(h).items() if v is not None and k != "ble_device"}
         for h in history
     ]
-    (config_dir / "history.json").write_text(json.dumps(data, indent=2))
+    data = load_config(config_dir)
+    data.setdefault("connection", {})["history"] = serialized
+    save_config(data, config_dir)
 
 
 _BLE_ADDR_RE = re.compile(
@@ -118,13 +124,12 @@ def _migrate_ble_entry(c: ConnectionConfig) -> ConnectionConfig:
     return c
 
 
-def load_connection_history(config_dir: Path = _DEFAULT_CONFIG_DIR) -> list[ConnectionConfig]:
+def load_connection_history(config_dir: Path | None = None) -> list[ConnectionConfig]:
     """Return recent connections, most recent first. Returns [] on any error."""
-    path = config_dir / "history.json"
-    if not path.exists():
-        return []
+    if config_dir is None:
+        config_dir = _default_config_dir()
     try:
-        entries = json.loads(path.read_text())
+        entries = load_config(config_dir).get("connection", {}).get("history", [])
         return [
             _migrate_ble_entry(
                 ConnectionConfig(

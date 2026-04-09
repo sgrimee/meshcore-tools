@@ -3,8 +3,7 @@
 Passwords are stored in plaintext on disk. Files are created with 600
 permissions (owner read/write only) to limit exposure.
 
-- ~/.config/meshcore-tools/settings.toml  — default_password field
-- ~/.config/meshcore-tools/passwords.toml — per-repeater passwords table
+- ~/.config/meshcore-tools/secrets.toml — default_password + per-repeater passwords
 """
 
 from __future__ import annotations
@@ -14,9 +13,9 @@ import stat
 import tomllib
 from pathlib import Path
 
-_DEFAULT_CONFIG_DIR = Path.home() / ".config" / "meshcore-tools"
-_SETTINGS_FILE = "settings.toml"
-_PASSWORDS_FILE = "passwords.toml"
+from meshcore_tools.config import _default_config_dir
+
+_SECRETS_FILE = "secrets.toml"
 
 
 def _write_secure(path: Path, content: str) -> None:
@@ -42,94 +41,104 @@ def _escape_toml_string(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
-# ---------------------------------------------------------------------------
-# settings.toml — default_password
-# ---------------------------------------------------------------------------
-
-
-def load_default_password(config_dir: Path = _DEFAULT_CONFIG_DIR) -> str | None:
-    """Return default_password from settings.toml, or None if unset."""
-    path = config_dir / _SETTINGS_FILE
+def _load_secrets(config_dir: Path) -> dict:
+    """Load secrets.toml; return empty dict if missing or corrupt."""
+    path = config_dir / _SECRETS_FILE
     if not path.exists():
-        return None
+        return {}
     try:
-        data = tomllib.loads(path.read_text())
-        value = data.get("default_password")
-        return str(value) if value else None
+        return tomllib.loads(path.read_text())
     except Exception:
-        return None
+        return {}
 
 
-def save_default_password(
-    password: str, config_dir: Path = _DEFAULT_CONFIG_DIR
-) -> None:
-    """Persist default_password to settings.toml with 600 permissions.
+def _write_secrets(data: dict, config_dir: Path) -> None:
+    """Serialize and write secrets.toml with 0o600 permissions.
 
-    WARNING: The password is stored in plaintext.
+    Top-level scalar keys are written first, then the [passwords] table.
     """
-    path = config_dir / _SETTINGS_FILE
-    existing: dict = {}
-    if path.exists():
-        try:
-            existing = tomllib.loads(path.read_text())
-        except Exception:
-            pass
-    existing["default_password"] = password
     lines = [
-        "# meshcore-tools settings\n",
-        "# WARNING: This file may contain plaintext passwords. Keep it private.\n",
+        "# meshcore-tools secrets\n",
+        "# WARNING: Passwords are stored in plaintext. Keep this file private.\n",
         "\n",
     ]
-    for key, value in existing.items():
+    for key, value in data.items():
+        if key == "passwords":
+            continue
         escaped = _escape_toml_string(str(value))
         lines.append(f'{key} = "{escaped}"\n')
+    passwords = data.get("passwords", {})
+    if passwords:
+        lines.append("\n[passwords]\n")
+        for key, value in passwords.items():
+            lines.append(
+                f'"{_escape_toml_string(key)}" = "{_escape_toml_string(value)}"\n'
+            )
+    path = config_dir / _SECRETS_FILE
     _write_secure(path, "".join(lines))
 
 
 # ---------------------------------------------------------------------------
-# passwords.toml — per-repeater passwords
+# secrets.toml — default_password
+# ---------------------------------------------------------------------------
+
+
+def load_default_password(config_dir: Path | None = None) -> str | None:
+    """Return default_password from secrets.toml, or None if unset."""
+    if config_dir is None:
+        config_dir = _default_config_dir()
+    data = _load_secrets(config_dir)
+    value = data.get("default_password")
+    return str(value) if value else None
+
+
+def save_default_password(
+    password: str, config_dir: Path | None = None
+) -> None:
+    """Persist default_password to secrets.toml with 600 permissions.
+
+    WARNING: The password is stored in plaintext.
+    """
+    if config_dir is None:
+        config_dir = _default_config_dir()
+    data = _load_secrets(config_dir)
+    data["default_password"] = password
+    _write_secrets(data, config_dir)
+
+
+# ---------------------------------------------------------------------------
+# secrets.toml — per-repeater passwords
 # ---------------------------------------------------------------------------
 
 
 def load_repeater_passwords(
-    config_dir: Path = _DEFAULT_CONFIG_DIR,
+    config_dir: Path | None = None,
 ) -> dict[str, str]:
     """Return per-repeater passwords keyed by node public_key. Returns {} on any error."""
-    path = config_dir / _PASSWORDS_FILE
-    if not path.exists():
-        return {}
-    try:
-        data = tomllib.loads(path.read_text())
-        return {
-            k: v
-            for k, v in data.get("passwords", {}).items()
-            if isinstance(v, str)
-        }
-    except Exception:
-        return {}
+    if config_dir is None:
+        config_dir = _default_config_dir()
+    data = _load_secrets(config_dir)
+    return {
+        k: v
+        for k, v in data.get("passwords", {}).items()
+        if isinstance(v, str)
+    }
 
 
 def save_repeater_password(
     node_key: str,
     password: str,
-    config_dir: Path = _DEFAULT_CONFIG_DIR,
+    config_dir: Path | None = None,
 ) -> None:
-    """Persist a per-repeater password to passwords.toml with 600 permissions.
+    """Persist a per-repeater password to secrets.toml with 600 permissions.
 
     WARNING: Passwords are stored in plaintext.
     """
-    passwords = load_repeater_passwords(config_dir)
-    passwords[node_key] = password
-    path = config_dir / _PASSWORDS_FILE
-    lines = [
-        "# meshcore-tools repeater passwords\n",
-        "# WARNING: Passwords are stored in plaintext. Protect this file.\n",
-        "\n",
-        "[passwords]\n",
-    ]
-    for key, value in passwords.items():
-        lines.append(f'"{_escape_toml_string(key)}" = "{_escape_toml_string(value)}"\n')
-    _write_secure(path, "".join(lines))
+    if config_dir is None:
+        config_dir = _default_config_dir()
+    data = _load_secrets(config_dir)
+    data.setdefault("passwords", {})[node_key] = password
+    _write_secrets(data, config_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -139,12 +148,14 @@ def save_repeater_password(
 
 def get_prefilled_password(
     contact: dict,
-    config_dir: Path = _DEFAULT_CONFIG_DIR,
+    config_dir: Path | None = None,
 ) -> str | None:
     """Return the best available pre-fill password for a contact.
 
     Precedence: per-repeater saved password > default_password > None.
     """
+    if config_dir is None:
+        config_dir = _default_config_dir()
     node_key = contact.get("public_key", "")
     if node_key:
         passwords = load_repeater_passwords(config_dir)

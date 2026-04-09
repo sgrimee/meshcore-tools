@@ -10,7 +10,7 @@ An unofficial terminal app for [MeshCore](https://meshcore.dev) LoRa mesh networ
 - **Live packet stream** — see every hop in real time, with relay hops resolved to node names
 - **Message decryption** — supply your channel keys and GroupText messages are shown in plain text
 - **Interactive map** — plot packet origins with SNR/RSSI overlay (optional `[map]` extra)
-- **MQTT or letsmesh REST** as packet source — configurable in `settings.toml`
+- **MQTT or letsmesh REST** as packet source — configurable in `config.toml`
 - **Expandable observer rows** — unfold a packet to see every individual observer report
 - **Log panel** — toggle with `l`, resize with `+`/`-`, write to file with `--log-file`
 
@@ -25,7 +25,7 @@ An unofficial terminal app for [MeshCore](https://meshcore.dev) LoRa mesh networ
 **Node database CLI**
 - Resolve short public-key prefixes to node names
 - Populated from the letsmesh API and `map.meshcore.dev`
-- Node blacklist in `settings.toml` to filter spurious or noisy nodes
+- Node blacklist in `config.toml` to filter spurious or noisy nodes
 
 ## Screenshots
 
@@ -83,7 +83,7 @@ Then build the node database for the first time:
 meshcore-tools nodes update
 ```
 
-The default region is `LUX`. Pass `--region YOUR_REGION` or set it once in `settings.toml` — it is saved for future runs.
+The default region is `LUX`. Pass `--region YOUR_REGION` or set it once in `config.toml` — it is saved for future runs.
 
 ## Usage
 
@@ -217,16 +217,18 @@ Shows device name, public key, firmware version, battery level, uptime, and LoRa
 
 ### Password management
 
-Passwords are stored with `600` permissions under `~/.config/meshcore-tools/`:
+Passwords are stored with `600` permissions in `~/.config/meshcore-tools/secrets.toml`:
 
-- `settings.toml` — `default_password` field; used as a fallback for all logins
-- `passwords.toml` — per-repeater passwords keyed by public key; take precedence over the default
+- `default_password` — fallback used for all logins
+- `[passwords]` table — per-repeater passwords keyed by public key; take precedence over the default
 
 Saved passwords are pre-filled in the login dialog automatically.
 
 ## Configuration
 
-Settings live in `$XDG_CONFIG_HOME/meshcore-tools/settings.toml` (defaults to `~/.config/meshcore-tools/settings.toml` on Linux and macOS). The file is created automatically when you first save a region or password. Example:
+Two files live under `$XDG_CONFIG_HOME/meshcore-tools/` (defaults to `~/.config/meshcore-tools/` on Linux and macOS). Both are created automatically as needed. See `config.toml.sample` and `secrets.toml.sample` in the project root for annotated templates.
+
+**`config.toml`** — general settings, connection state, and filter rules:
 
 ```toml
 [general]
@@ -244,6 +246,15 @@ port = 1883
 topic = "meshcore/raw"
 # username = "..."
 # password = "..."
+```
+
+**`secrets.toml`** (always `600` permissions) — login passwords:
+
+```toml
+default_password = "hunter2"
+
+[passwords]
+"abcdef1234..." = "repeater-specific-pw"
 ```
 
 | Key | Default | Description |
