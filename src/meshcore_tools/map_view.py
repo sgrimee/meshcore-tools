@@ -142,29 +142,40 @@ def collect_map_nodes(
         relays = full_path if is_direct else full_path[1:]
 
     if resolved_hops is not None:
-        # Use pre-resolved hop data for relay nodes
-        for hop in resolved_hops:
-            # Determine key to check for blacklist
-            check_key = hop.resolved_key if hop.resolved_key is not None else hop.raw_hash
+        # Build a lookup map from raw_hash → ResolvedHop (for the relay subset only)
+        resolved_map = {rh.raw_hash.lower(): rh for rh in resolved_hops}
+        for relay_id in relays:
+            rh = resolved_map.get(relay_id.lower())
+            if rh is None:
+                add_node(relay_id, "relay")
+                continue
+            check_key = rh.resolved_key if rh.resolved_key is not None else relay_id
             if is_blacklisted(check_key, db, bl):
                 logger.debug(
                     "blacklist: skipping resolved relay hop %s (%s) in map",
                     check_key,
-                    hop.name,
+                    rh.name,
                 )
                 continue
-            if hop.lat is not None and hop.lon is not None:
-                lat, lon = hop.lat, hop.lon
+            label = rh.name
+            # Use resolved coords when available, fall back to DB lookup for
+            # ambiguous/unknown hops (preserves old placement behaviour)
+            if rh.lat is not None and rh.lon is not None:
+                coords: tuple[float, float] | None = (rh.lat, rh.lon)
+            else:
+                coords = _lookup_coords(relay_id, db)
+            if coords is None:
+                if label not in unplaced:
+                    unplaced.append(label)
+            else:
+                lat, lon = coords
                 for i, (_, r, elat, elon) in enumerate(placed):
                     if elat == lat and elon == lon:
                         if _ROLE_PRIORITY["relay"] < _ROLE_PRIORITY[r]:
-                            placed[i] = (hop.name, "relay", lat, lon)
+                            placed[i] = (label, "relay", lat, lon)
                         break
                 else:
-                    placed.append((hop.name, "relay", lat, lon))
-            else:
-                if hop.name not in unplaced:
-                    unplaced.append(hop.name)
+                    placed.append((label, "relay", lat, lon))
     else:
         for hop in relays:
             add_node(hop, "relay")
