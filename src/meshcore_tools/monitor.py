@@ -138,6 +138,49 @@ def _fmt_hash(h: str, db: dict, hop_size: int = 1) -> str:
     return f"[dim]{display}[/dim]  {name}"
 
 
+def _path_detail_lines(
+    full_path: list, db: dict, hop_size: int,
+    src_hash: str, route_type: str, ptype: str, dest_hash: str,
+) -> list[str]:
+    """Return one formatted line per path hop for the detail view.
+
+    Each line: '  hex  name  [dim](role)[/dim]'
+    Roles: (src), (dest) — relays have no role label.
+    """
+    is_direct = route_type in ("Direct", "TransportDirect")
+    is_group = ptype in GROUP_TYPES
+    lines: list[str] = []
+
+    def _hop_line(node_id: str, role: str = "") -> str:
+        role_str = f"  [dim]({role})[/dim]" if role else ""
+        return f"  {_fmt_hash(node_id, db, hop_size)}{role_str}"
+
+    # Source
+    if src_hash:
+        lines.append(_hop_line(src_hash, "src"))
+    elif is_group and not is_direct:
+        lines.append("  [dim]enc[/dim]  [dim](src encrypted)[/dim]")
+    elif full_path and not is_direct:
+        lines.append(_hop_line(full_path[0], "src"))
+    else:
+        lines.append("  [dim]?[/dim]  [dim](src unknown)[/dim]")
+
+    # Relays
+    if is_group and not is_direct:
+        relay_hops = full_path
+    else:
+        relay_hops = full_path if is_direct else full_path[1:]
+
+    for hop in relay_hops:
+        lines.append(_hop_line(hop))
+
+    # Destination
+    if dest_hash:
+        lines.append(_hop_line(dest_hash, "dest"))
+
+    return lines
+
+
 def _build_detail_text(packet: dict, db: dict) -> str:
     p = packet
     dec = p.get("_decoded") or decode_packet(p.get("raw_data", "") or "")
@@ -162,57 +205,31 @@ def _build_detail_text(packet: dict, db: dict) -> str:
         f"[dim]Type:[/dim]       {ptype}{pver_str}",
     ]
 
-    # --- Source / Relays / Destination ---
+    # --- Path ---
     lines.append("")
     full_path = dec.get("path") or p.get("_path") or []
     hop_size = dec.get("path_hop_size", 1)
     payload_dec = dec.get("decoded") or {}
 
-    is_direct = route in ("Direct", "TransportDirect")
     is_group = ptype in GROUP_TYPES
 
-    # Authoritative source: payload src_hash (all encrypted types) or Advert public_key
     src_hash = payload_dec.get("src_hash", "") or p.get("_src_hash", "")
     advert_pubkey = payload_dec.get("public_key", "") if ptype == "Advert" else ""
-
-    if advert_pubkey:
-        lines.append(f"[dim]Source:[/dim]     [dim]{_trim_hash(advert_pubkey, hop_size)}[/dim]  "
-                     f"{resolve_name(advert_pubkey, db)}")
-    elif src_hash:
-        lines.append(f"[dim]Source:[/dim]     {_fmt_hash(src_hash, db, hop_size)}")
-    elif is_group:
-        # GroupText/GroupData encrypt sender identity; show if decrypted
-        decrypted = p.get("_decrypted")
-        if decrypted and decrypted.get("sender"):
-            lines.append(f"[dim]Source:[/dim]     {markup_escape(decrypted['sender'])}")
-        else:
-            lines.append("[dim]Source:[/dim]     [dim]encrypted[/dim]")
-    elif full_path and not is_direct:
-        lines.append(f"[dim]Source:[/dim]     {_fmt_hash(full_path[0], db, hop_size)}")
-    else:
-        lines.append("[dim]Source:[/dim]     unknown")
-
-    # Relays: for Direct routing all path hops are relays; for Flood skip path[0] (=source).
-    # For group types path[0] is the last forwarder (sender identity is encrypted),
-    # so show it as "Forwarder" and treat the remaining hops as relays.
-    if is_group and not is_direct:
-        forwarder = full_path[0] if full_path else None
-        relays = full_path[1:]
-        if forwarder:
-            lines.append(f"[dim]Forwarder:[/dim]  {_fmt_hash(forwarder, db, hop_size)}")
-    else:
-        relays = full_path if is_direct else full_path[1:]
-    lines.append(f"[dim]Path:[/dim]       {hop_size}-byte addresses")
-    if relays:
-        lines.append("[dim]Relays:[/dim]")
-        for hop in relays:
-            lines.append(f"  {_fmt_hash(hop, db, hop_size)}")
-    else:
-        lines.append("[dim]Relays:[/dim]     none")
-
     dest_hash = payload_dec.get("dest_hash", "")
-    if dest_hash:
-        lines.append(f"[dim]Dest:[/dim]       {_fmt_hash(dest_hash, db, hop_size)}")
+
+    lines.append(f"[dim]Path:[/dim]       [dim]({hop_size}-byte addresses)[/dim]")
+    lines.extend(_path_detail_lines(
+        full_path, db, hop_size,
+        src_hash=advert_pubkey or src_hash,
+        route_type=route,
+        ptype=ptype,
+        dest_hash=dest_hash,
+    ))
+
+    # Surface decrypted sender for GroupText when available
+    decrypted = p.get("_decrypted")
+    if is_group and decrypted and decrypted.get("sender"):
+        lines.append(f"[dim]Sender:[/dim]     {markup_escape(decrypted['sender'])}")
 
     # --- Decoded payload ---
     lines.append("")
