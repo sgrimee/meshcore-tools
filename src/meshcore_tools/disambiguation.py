@@ -41,7 +41,7 @@ def resolve_path_hops(
     source_hash: str | None = None,
     observer_id: str | None = None,
 ) -> list[ResolvedHop]:
-    """Resolve a list of hop hashes to ResolvedHop objects (Tier 1 only for now).
+    """Resolve a list of hop hashes to ResolvedHop objects (Tier 1 + Tier 2).
 
     For each hop hash:
     - 0 matches → confidence="unknown", name=hop_hash[:8]
@@ -50,6 +50,9 @@ def resolve_path_hops(
 
     Blacklist: entries whose name contains any blacklist term (case-insensitive) are
     excluded before counting matches. If blacklist reduces N to 1, that gets "unique".
+
+    After Tier 1, if any hops remain ambiguous, Tier 2 geographic scoring is applied
+    using source/observer coordinates as anchors when available.
     """
     bl = [term.lower() for term in (blacklist or [])]
 
@@ -101,6 +104,15 @@ def resolve_path_hops(
                 confidence="ambiguous",
                 candidates=candidate_keys,
             ))
+
+    # Tier 2: geographic scoring for ambiguous hops
+    if any(hop.confidence == "ambiguous" for hop in results):
+        spatial_index = _build_spatial_index(db)
+        source_coords = spatial_index.get(source_hash.lower()) if source_hash else None
+        observer_coords = spatial_index.get(observer_id.lower()) if observer_id else None
+        results = _resolve_ambiguous_hops_by_geometry(
+            results, spatial_index, source_coords, observer_coords, db
+        )
 
     return results
 
@@ -176,6 +188,7 @@ def _resolve_ambiguous_hops_by_geometry(
     spatial_index: dict[str, tuple[float, float]],
     source_coords: tuple[float, float] | None,
     observer_coords: tuple[float, float] | None,
+    db: dict,
 ) -> list[ResolvedHop]:
     """Try to resolve ambiguous hops using geographic scoring.
 
@@ -239,10 +252,8 @@ def _resolve_ambiguous_hops_by_geometry(
     for hop, chosen_key in zip(hops, best_combo):
         if hop.confidence == "ambiguous":
             coords = spatial_index.get(chosen_key)
-            # Find name from original candidates list via the hop's raw data
-            # We need to look up the name; it's not stored per-key in ResolvedHop.
-            # Use the key prefix as fallback name — caller can re-resolve if needed.
-            name = chosen_key[:8]
+            entry = db.get("nodes", {}).get(chosen_key, {})
+            name = entry.get("name", chosen_key[:8])
             updated.append(ResolvedHop(
                 raw_hash=hop.raw_hash,
                 resolved_key=chosen_key,
