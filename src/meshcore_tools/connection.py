@@ -19,7 +19,7 @@ from textual import work
 
 import serial.tools.list_ports
 
-from meshcore_tools.config import _default_config_dir, load_config, save_config
+from meshcore_tools.config import _ensure_config_dir, load_config, save_config
 
 try:
     from bleak import BleakScanner
@@ -45,8 +45,6 @@ class ConnectionConfig:
 
 def load_connection_config(config_dir: Path | None = None) -> ConnectionConfig | None:
     """Return stored connection config or None if absent."""
-    if config_dir is None:
-        config_dir = _default_config_dir()
     conn = load_config(config_dir).get("connection", {})
     if not conn.get("type"):
         return None
@@ -61,16 +59,17 @@ def load_connection_config(config_dir: Path | None = None) -> ConnectionConfig |
     )
 
 
+def _serialize_connection_config(config: ConnectionConfig) -> dict:
+    return {k: v for k, v in asdict(config).items() if v is not None and k != "ble_device"}
+
+
 def save_connection_config(
     config: ConnectionConfig, config_dir: Path | None = None
 ) -> None:
     """Persist connection config to config.toml, creating parent directories as needed."""
-    if config_dir is None:
-        config_dir = _default_config_dir()
+    config_dir = _ensure_config_dir(config_dir)
     data = load_config(config_dir)
-    data["connection"] = {
-        k: v for k, v in asdict(config).items() if v is not None and k != "ble_device"
-    }
+    data["connection"] = _serialize_connection_config(config)
     save_config(data, config_dir)
     save_connection_history(config, config_dir)
 
@@ -89,15 +88,11 @@ def save_connection_history(
     config: ConnectionConfig, config_dir: Path | None = None
 ) -> None:
     """Prepend config to the recent-connections list, deduplicating by identity."""
-    if config_dir is None:
-        config_dir = _default_config_dir()
+    config_dir = _ensure_config_dir(config_dir)
     existing = load_connection_history(config_dir)
     deduped = [h for h in existing if _config_key(h) != _config_key(config)]
     history = ([config] + deduped)[:_HISTORY_MAX]
-    serialized = [
-        {k: v for k, v in asdict(h).items() if v is not None and k != "ble_device"}
-        for h in history
-    ]
+    serialized = [_serialize_connection_config(h) for h in history]
     data = load_config(config_dir)
     data.setdefault("connection", {})["history"] = serialized
     save_config(data, config_dir)
@@ -126,8 +121,6 @@ def _migrate_ble_entry(c: ConnectionConfig) -> ConnectionConfig:
 
 def load_connection_history(config_dir: Path | None = None) -> list[ConnectionConfig]:
     """Return recent connections, most recent first. Returns [] on any error."""
-    if config_dir is None:
-        config_dir = _default_config_dir()
     try:
         entries = load_config(config_dir).get("connection", {}).get("history", [])
         return [
@@ -165,18 +158,6 @@ def list_serial_ports() -> list[tuple[str, str]]:
     """Return (display_label, port_path) pairs for available serial ports, sorted by port."""
     ports = serial.tools.list_ports.comports()
     return [(f"{port} — {desc}", port) for port, desc, _ in sorted(ports)]
-
-
-def format_ble_devices(devices: list) -> list[tuple[str, str]]:
-    """Return (display_label, address) pairs for MeshCore BLE devices.
-
-    Filters to devices whose name starts with 'MeshCore'. Devices with no name are skipped.
-    """
-    result = []
-    for d in devices:
-        if d.name and d.name.startswith("MeshCore"):
-            result.append((f"{d.name}  {d.address}", d.address))
-    return result
 
 
 async def _known_ble_devices() -> list[tuple[str, str]]:
@@ -242,6 +223,16 @@ async def _scan_ble_subprocess() -> list[tuple[str, str]]:
         raise RuntimeError(f"BLE scan process exited with code {proc.returncode}")
     data = json.loads(stdout or b"[]")
     return [(f"{name}  {addr}", addr) for name, addr in data]
+
+
+def _build_ble_name_map(options: list[tuple[str, str]]) -> dict[str, str]:
+    """Extract {address: name} from BLE scan labels formatted as 'Name  address'."""
+    result: dict[str, str] = {}
+    for label, addr in options:
+        name = label.replace(f"  {addr}", "").strip()
+        if name:
+            result[addr] = name
+    return result
 
 
 def _ble_scan_error(exc: Exception) -> str:
@@ -452,11 +443,7 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
                 ]
             else:
                 return
-            name_map: dict[str, str] = {}
-            for label, addr in options:
-                name_part = label.replace(f"  {addr}", "").strip()
-                if name_part:
-                    name_map[addr] = name_part
+            name_map = _build_ble_name_map(options)
             for btn in self.query(_RecentButton):
                 if btn.config.type == "ble" and not btn.config.ble_name and btn.config.ble_address:
                     name = name_map.get(btn.config.ble_address)
@@ -506,11 +493,7 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
             seen = {addr for _, addr in options}
             options += [entry for entry in known if entry[1] not in seen]
             if options:
-                # Build address → name map from option labels ("Name  address" format)
-                for label, addr in options:
-                    name_part = label.replace(f"  {addr}", "").strip()
-                    if name_part:
-                        self._ble_name_map[addr] = name_part
+                self._ble_name_map.update(_build_ble_name_map(options))
                 ble_sel.set_options(options)
                 ble_sel.value = options[0][1]
                 ble_sel.display = True

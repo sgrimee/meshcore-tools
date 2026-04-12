@@ -2,6 +2,7 @@
 
 import json
 import urllib.request
+from typing import Any
 
 DEFAULT_REGION = "LUX"
 
@@ -18,6 +19,12 @@ _HEADERS = {
 _ROLE_MAP = {1: "CLI", 2: "REP", 3: "RMS", 4: "CLT"}
 
 
+def _fetch_json(url: str) -> Any:
+    req = urllib.request.Request(url, headers=_HEADERS)
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read())
+
+
 class LetsmeshRestProvider:
     """REST client for api.letsmesh.net.
 
@@ -26,10 +33,7 @@ class LetsmeshRestProvider:
 
     def fetch_nodes(self, region: str) -> dict[str, dict]:
         """Fetch nodes. Returns dict keyed by 64-char hex public key."""
-        url = f"{_API_NODES_URL}?region={region}"
-        req = urllib.request.Request(url, headers=_HEADERS)
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read())
+        data = _fetch_json(f"{_API_NODES_URL}?region={region}")
         nodes: dict[str, dict] = {}
         for n in data.get("nodes", []):
             key = n["public_key"].lower()
@@ -44,10 +48,7 @@ class LetsmeshRestProvider:
 
     def fetch_packets(self, region: str, limit: int = 50) -> list[dict]:
         """Fetch recent packets."""
-        url = f"{_API_PACKETS_URL}?region={region}&limit={limit}"
-        req = urllib.request.Request(url, headers=_HEADERS)
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read())
+        data = _fetch_json(f"{_API_PACKETS_URL}?region={region}&limit={limit}")
         if isinstance(data, list):
             return data
         return data.get("packets", [])

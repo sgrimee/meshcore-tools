@@ -17,7 +17,7 @@ Dependency: `textual>=0.80` (TUI framework). Optional: `meshcore>=2.3.3` (compan
 **Module layout:**
 - `src/meshcore_tools/cli.py` — entry point; no subcommand or `monitor` launches `MeshCoreApp`; `nodes` subcommands unchanged
 - `src/meshcore_tools/app.py` — `MeshCoreApp` (unified TUI with Monitor/Chat/Repeater tabs); `COMPANION_AVAILABLE` flag
-- `src/meshcore_tools/monitor.py` — `MonitorTab(TabPane)` + `PacketMonitorApp` (legacy) + `run_monitor()`
+- `src/meshcore_tools/monitor.py` — `MonitorTab(TabPane)` + `run_monitor()`
 - `src/meshcore_tools/chat.py` — `ChatTab(TabPane)` (channel strip, message log, 133-char input); only mounted when companion available
 - `src/meshcore_tools/repeaters.py` — `RepeatersTab(TabPane)` (repeater list + Status/Login/Cmd/Trace/Reboot); only mounted when companion available
 - `src/meshcore_tools/companion.py` — `CompanionManager` (async meshcore bridge) + 6 Textual message classes; `_MESHCORE_AVAILABLE` flag

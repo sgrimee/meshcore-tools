@@ -5,16 +5,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import struct
-import textwrap
-from pathlib import Path
 
 from Crypto.Cipher import AES
 
 from meshcore_tools.channels import (
     PUBLIC_CHANNEL_KEY,
     build_channel_lookup,
-    load_channels,
-    persist_new_channels,
     try_decrypt,
     _aes_ecb_decrypt,
     _channel_hash_byte,
@@ -59,75 +55,6 @@ def test_channel_hash_byte():
     assert h == hashlib.sha256(PUBLIC_CHANNEL_KEY).digest()[0]
     assert isinstance(h, int)
     assert 0 <= h <= 255
-
-
-# ---------------------------------------------------------------------------
-# load_channels parsing
-# ---------------------------------------------------------------------------
-
-def _write_tmp(tmp_path: Path, content: str) -> str:
-    f = tmp_path / "channels.txt"
-    f.write_text(textwrap.dedent(content))
-    return str(f)
-
-
-def test_load_channels_get_channels_format(tmp_path):
-    path = _write_tmp(tmp_path, """\
-        0: Public [8b3387e9c5cdea6ac9e5edbaa115cd72]
-        1: #wardriving [e3c26491e9cd321e3a6be50d57d54acf]
-        2: #chaosstuff [b53025e867806e0b5e241adc0d47358b]
-    """)
-    channels = load_channels(path)
-    assert len(channels) == 3
-    assert channels[0] == ("Public", PUBLIC_CHANNEL_KEY)
-    assert channels[1] == ("#wardriving", bytes.fromhex("e3c26491e9cd321e3a6be50d57d54acf"))
-    assert channels[2] == ("#chaosstuff", bytes.fromhex("b53025e867806e0b5e241adc0d47358b"))
-
-
-def test_load_channels_bare_hashtag(tmp_path):
-    path = _write_tmp(tmp_path, "#wardriving\n")
-    channels = load_channels(path)
-    assert len(channels) == 1
-    label, key = channels[0]
-    assert label == "#wardriving"
-    assert key == _derive_hashtag_key("wardriving")
-
-
-def test_load_channels_comments_and_blanks(tmp_path):
-    path = _write_tmp(tmp_path, """\
-        # This is a comment
-        # another comment
-
-        0: Public [8b3387e9c5cdea6ac9e5edbaa115cd72]
-    """)
-    channels = load_channels(path)
-    assert len(channels) == 1
-
-
-def test_load_channels_public_case_insensitive(tmp_path):
-    path = _write_tmp(tmp_path, "0: PUBLIC [8b3387e9c5cdea6ac9e5edbaa115cd72]\n")
-    channels = load_channels(path)
-    assert channels[0][1] == PUBLIC_CHANNEL_KEY
-
-
-def test_load_channels_missing_file():
-    channels = load_channels("/nonexistent/path/channels.txt")
-    assert channels == []
-
-
-def test_load_channels_mixed(tmp_path):
-    path = _write_tmp(tmp_path, """\
-        # comment
-        0: Public [8b3387e9c5cdea6ac9e5edbaa115cd72]
-        #myhashtag
-        1: #wardriving [e3c26491e9cd321e3a6be50d57d54acf]
-    """)
-    channels = load_channels(path)
-    assert len(channels) == 3
-    labels = [c[0] for c in channels]
-    assert "Public" in labels
-    assert "#myhashtag" in labels
-    assert "#wardriving" in labels
 
 
 # ---------------------------------------------------------------------------
@@ -260,134 +187,6 @@ def test_try_decrypt_unknown_channel_returns_none():
     ciphertext = payload[3:]
     result = try_decrypt(ch_byte, mac, ciphertext, lookup={})
     assert result is None
-
-
-# ---------------------------------------------------------------------------
-# persist_new_channels
-# ---------------------------------------------------------------------------
-
-_WARDRIVING_KEY = "e3c26491e9cd321e3a6be50d57d54acf"
-_CHAOS_KEY = "b53025e867806e0b5e241adc0d47358b"
-
-
-def test_persist_new_channels_appends_new_entry(tmp_path):
-    path = str(tmp_path / "channels.txt")
-    new_ch = [{"idx": 0, "name": "#wardriving", "key_hex": _WARDRIVING_KEY}]
-    added = persist_new_channels(path, new_ch)
-    assert len(added) == 1
-    assert added[0] == ("#wardriving", bytes.fromhex(_WARDRIVING_KEY))
-    content = (tmp_path / "channels.txt").read_text()
-    assert f"#wardriving [{_WARDRIVING_KEY}]" in content
-
-
-def test_persist_new_channels_no_duplicate_by_name(tmp_path):
-    path = _write_tmp(tmp_path, f"0: #wardriving [{_WARDRIVING_KEY}]\n")
-    new_ch = [{"idx": 0, "name": "#wardriving", "key_hex": _WARDRIVING_KEY}]
-    added = persist_new_channels(path, new_ch)
-    assert added == []
-
-
-def test_persist_new_channels_no_duplicate_by_key(tmp_path):
-    path = _write_tmp(tmp_path, f"0: MyChannel [{_WARDRIVING_KEY}]\n")
-    new_ch = [{"idx": 0, "name": "#wardriving", "key_hex": _WARDRIVING_KEY}]
-    added = persist_new_channels(path, new_ch)
-    assert added == []
-
-
-def test_persist_new_channels_skips_missing_key(tmp_path):
-    path = str(tmp_path / "channels.txt")
-    new_ch = [{"idx": 0, "name": "NoKey"}]
-    added = persist_new_channels(path, new_ch)
-    assert added == []
-    assert not (tmp_path / "channels.txt").exists()
-
-
-def test_persist_new_channels_file_created_when_missing(tmp_path):
-    path = str(tmp_path / "newdir" / "channels.txt")
-    (tmp_path / "newdir").mkdir()
-    new_ch = [{"idx": 0, "name": "#wardriving", "key_hex": _WARDRIVING_KEY}]
-    added = persist_new_channels(path, new_ch)
-    assert len(added) == 1
-    content = (tmp_path / "newdir" / "channels.txt").read_text()
-    assert _WARDRIVING_KEY in content
-
-
-def test_persist_new_channels_appends_multiple(tmp_path):
-    path = str(tmp_path / "channels.txt")
-    new_ch = [
-        {"idx": 0, "name": "#wardriving", "key_hex": _WARDRIVING_KEY},
-        {"idx": 1, "name": "#chaosstuff", "key_hex": _CHAOS_KEY},
-    ]
-    added = persist_new_channels(path, new_ch)
-    assert len(added) == 2
-    content = (tmp_path / "channels.txt").read_text()
-    assert _WARDRIVING_KEY in content
-    assert _CHAOS_KEY in content
-
-
-def test_persist_new_channels_index_continues_after_existing(tmp_path):
-    path = _write_tmp(tmp_path, "0: Public [8b3387e9c5cdea6ac9e5edbaa115cd72]\n")
-    new_ch = [{"idx": 1, "name": "#wardriving", "key_hex": _WARDRIVING_KEY}]
-    persist_new_channels(path, new_ch)
-    lines = [line for line in (tmp_path / "channels.txt").read_text().splitlines() if line.strip()]
-    # New entry should start at index 1
-    assert any(line.startswith("1:") for line in lines)
-
-
-def test_persist_new_channels_reloadable(tmp_path):
-    path = str(tmp_path / "channels.txt")
-    new_ch = [{"idx": 0, "name": "#wardriving", "key_hex": _WARDRIVING_KEY}]
-    persist_new_channels(path, new_ch)
-    reloaded = load_channels(path)
-    assert len(reloaded) == 1
-    assert reloaded[0] == ("#wardriving", bytes.fromhex(_WARDRIVING_KEY))
-
-
-def test_persist_new_channels_invalid_key_hex_skipped(tmp_path):
-    path = str(tmp_path / "channels.txt")
-    new_ch = [{"idx": 0, "name": "#bad", "key_hex": "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"}]
-    added = persist_new_channels(path, new_ch)
-    assert added == []
-
-
-def test_persist_new_channels_key_as_bytes(tmp_path):
-    """key_hex must be a hex string; bytes values in the dict are handled by companion."""
-    path = str(tmp_path / "channels.txt")
-    # key_hex should be a string — bytes value is not accepted by persist_new_channels
-    new_ch = [{"idx": 0, "name": "#wardriving", "key_hex": None}]
-    added = persist_new_channels(path, new_ch)
-    assert added == []
-
-
-def test_persist_new_channels_empty_name_skipped(tmp_path):
-    path = str(tmp_path / "channels.txt")
-    new_ch = [{"name": "", "key_hex": _WARDRIVING_KEY}]
-    added = persist_new_channels(path, new_ch)
-    assert added == []
-
-
-# ---------------------------------------------------------------------------
-# load_channels — unrecognized line triggers warning
-# ---------------------------------------------------------------------------
-
-def test_load_channels_bad_line_emits_warning(tmp_path, capsys):
-    path = _write_tmp(tmp_path, "this is not a valid line\n")
-    channels = load_channels(path)
-    assert channels == []
-    stderr = capsys.readouterr().err
-    assert "unrecognised" in stderr
-
-
-def test_load_channels_bad_line_does_not_affect_valid_entries(tmp_path):
-    path = _write_tmp(tmp_path, """\
-        0: Public [8b3387e9c5cdea6ac9e5edbaa115cd72]
-        this is garbage
-        #wardriving
-    """)
-    channels = load_channels(path)
-    labels = [c[0] for c in channels]
-    assert "Public" in labels
-    assert "#wardriving" in labels
 
 
 # ---------------------------------------------------------------------------

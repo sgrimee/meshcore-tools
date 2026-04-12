@@ -13,10 +13,13 @@ def _default_config_dir() -> Path:
     return base / "meshcore-tools"
 
 
+def _ensure_config_dir(config_dir: Path | None) -> Path:
+    return config_dir if config_dir is not None else _default_config_dir()
+
+
 def load_config(config_dir: Path | None = None) -> dict:
     """Load config from config.toml; return empty dict if missing or corrupt."""
-    if config_dir is None:
-        config_dir = _default_config_dir()
+    config_dir = _ensure_config_dir(config_dir)
     path = config_dir / "config.toml"
     if not path.exists():
         return {}
@@ -28,8 +31,7 @@ def load_config(config_dir: Path | None = None) -> dict:
 
 def save_config(data: dict, config_dir: Path | None = None) -> None:
     """Write *data* to config.toml, creating the directory if needed."""
-    if config_dir is None:
-        config_dir = _default_config_dir()
+    config_dir = _ensure_config_dir(config_dir)
     config_dir.mkdir(parents=True, exist_ok=True)
     path = config_dir / "config.toml"
     path.write_text(_to_toml(data))

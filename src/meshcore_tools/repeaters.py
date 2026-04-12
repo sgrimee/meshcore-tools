@@ -53,9 +53,6 @@ def _format_response(result: str) -> str:
     return markup_escape(result)
 
 
-# Short badge shown in list next to each contact name
-_TYPE_BADGE: dict[int, str] = {0: "???", 1: "CLI", 2: "REP", 3: "RMS", 4: "SNS"}
-
 # Which command buttons are shown for each contact type
 _TYPE_CMDS: dict[int, list[str]] = {
     0: [],                                                              # Unknown

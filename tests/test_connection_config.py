@@ -1,12 +1,11 @@
 """Tests for ConnectionConfig load/save."""
 
 import tomllib
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from meshcore_tools.connection import (
     ConnectionConfig,
     connection_label,
-    format_ble_devices,
     list_serial_ports,
     load_connection_config,
     load_connection_history,
@@ -129,50 +128,6 @@ def test_list_serial_ports_sorted_and_formatted():
         ("/dev/ttyUSB0 — FTDI", "/dev/ttyUSB0"),
         ("/dev/ttyUSB1 — CP2102", "/dev/ttyUSB1"),
     ]
-
-
-# --- format_ble_devices tests ---
-
-
-def _make_ble_device(name, address):
-    d = MagicMock()
-    d.name = name
-    d.address = address
-    return d
-
-
-def test_format_ble_devices_empty():
-    assert format_ble_devices([]) == []
-
-
-def test_format_ble_devices_filters_non_meshcore():
-    """Devices whose name does not start with MeshCore are excluded."""
-    devices = [_make_ble_device("SomeOtherDevice", "AA:BB:CC:DD:EE:FF")]
-    assert format_ble_devices(devices) == []
-
-
-def test_format_ble_devices_value_is_address():
-    """Value stored in Select is the MAC address for direct connection."""
-    devices = [_make_ble_device("MeshCore-abc", "11:22:33:44:55:66")]
-    result = format_ble_devices(devices)
-    assert result == [("MeshCore-abc  11:22:33:44:55:66", "11:22:33:44:55:66")]
-
-
-def test_format_ble_devices_skips_none_name():
-    devices = [_make_ble_device(None, "11:22:33:44:55:66")]
-    assert format_ble_devices(devices) == []
-
-
-def test_format_ble_devices_multiple():
-    devices = [
-        _make_ble_device("MeshCore-1", "AA:AA:AA:AA:AA:AA"),
-        _make_ble_device("Unrelated", "BB:BB:BB:BB:BB:BB"),
-        _make_ble_device("MeshCore-2", "CC:CC:CC:CC:CC:CC"),
-    ]
-    result = format_ble_devices(devices)
-    assert len(result) == 2
-    assert result[0] == ("MeshCore-1  AA:AA:AA:AA:AA:AA", "AA:AA:AA:AA:AA:AA")
-    assert result[1] == ("MeshCore-2  CC:CC:CC:CC:CC:CC", "CC:CC:CC:CC:CC:CC")
 
 
 # --- ConnectScreen structural tests ---

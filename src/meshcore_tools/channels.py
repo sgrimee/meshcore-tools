@@ -1,14 +1,4 @@
-"""Channel key management and GroupText/GroupData decryption.
-
-Supports three channel types:
-  - Public channel  : fixed well-known 16-byte key
-  - Hashtag channels: key = SHA256("#name")[:16]  (derived automatically)
-  - Named channels  : explicit 16-byte key supplied by the user
-
-The channels file is compatible with the output of 'get_channels' in meshcore-cli:
-  0: Public [8b3387e9c5cdea6ac9e5edbaa115cd72]
-  1: #wardriving [e3c26491e9cd321e3a6be50d57d54acf]
-  #myhashtagchannel          <- bare hashtag, key derived automatically
+"""Channel key lookup and GroupText/GroupData decryption.
 
 Decryption:
   GroupText/GroupData payloads are AES-128-ECB encrypted.
@@ -20,9 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import re
 import struct
-import sys
 
 from Crypto.Cipher import AES  # pycryptodome
 
@@ -33,127 +21,10 @@ from Crypto.Cipher import AES  # pycryptodome
 PUBLIC_CHANNEL_KEY = bytes.fromhex("8b3387e9c5cdea6ac9e5edbaa115cd72")
 PUBLIC_CHANNEL_LABEL = "Public"
 
-# Pattern: optional "N: " prefix, then name, then [32hexchars]
-_GET_CHANNELS_RE = re.compile(
-    r"^(?:\d+:\s+)?(.+?)\s+\[([0-9a-fA-F]{32})\]\s*$"
-)
-
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
-
-def load_channels(path: str) -> list[tuple[str, bytes]]:
-    """Parse a channels file and return [(label, key_bytes), ...].
-
-    Accepts 'get_channels' output pasted verbatim, bare hashtag names,
-    and lines starting with '# ' or just '#' (treated as comments).
-    """
-    channels: list[tuple[str, bytes]] = []
-    try:
-        with open(path, encoding="utf-8") as f:
-            lines = f.readlines()
-    except OSError:
-        return channels
-
-    bad_lines: list[int] = []
-    for lineno, raw in enumerate(lines, 1):
-        line = raw.strip()
-        if not line:
-            continue
-        # "# " (hash-space) = comment; "#" alone = comment
-        if line == "#" or line.startswith("# "):
-            continue
-
-        # get_channels format: [N: ] Name [32hexchars]
-        m = _GET_CHANNELS_RE.match(line)
-        if m:
-            name, key_hex = m.group(1).strip(), m.group(2)
-            if name.lower() == "public":
-                channels.append((PUBLIC_CHANNEL_LABEL, PUBLIC_CHANNEL_KEY))
-            else:
-                channels.append((name, bytes.fromhex(key_hex)))
-            continue
-
-        # Bare hashtag: "#word" with no space after "#"
-        if re.match(r"^#\S+$", line):
-            tag = line[1:]  # strip leading #
-            channels.append((line, _derive_hashtag_key(tag)))
-            continue
-
-        bad_lines.append(lineno)
-
-    if bad_lines:
-        line_list = ", ".join(str(n) for n in bad_lines)
-        print(
-            f"Warning: {path!r}: {len(bad_lines)} unrecognised line(s) skipped"
-            f" (lines {line_list}).\n"
-            f"  Expected format: 'Name [32hexchars]', '#hashtag', or '# comment'.",
-            file=sys.stderr,
-        )
-
-    return channels
-
-
-def persist_new_channels(path: str, new_channels: list[dict]) -> list[tuple[str, bytes]]:
-    """Append channel entries from *new_channels* that are not already in *path*.
-
-    Each item in *new_channels* is a dict with at least ``name`` (str) and
-    optionally ``key_hex`` (32-char hex string representing the 16-byte AES key).
-    Entries without ``key_hex`` are skipped — they cannot be used for decryption.
-
-    Only appends entries whose name or key are not already present in the file.
-    Returns a list of newly appended ``(name, key_bytes)`` pairs (empty if none added).
-    """
-    existing = load_channels(path)
-    existing_names = {label.lower() for label, _ in existing}
-    existing_keys = {key for _, key in existing}
-
-    to_append: list[tuple[str, bytes]] = []
-    for ch in new_channels:
-        key_hex = ch.get("key_hex") or ""
-        if not key_hex or len(key_hex) != 32:
-            continue
-        try:
-            key_bytes = bytes.fromhex(key_hex)
-        except ValueError:
-            continue
-        name = ch.get("name") or ""
-        if not name:
-            continue
-        if name.lower() in existing_names or key_bytes in existing_keys:
-            continue
-        to_append.append((name, key_bytes))
-        existing_names.add(name.lower())
-        existing_keys.add(key_bytes)
-
-    if to_append:
-        # Determine the next index to use for new entries
-        existing_indexed = _count_indexed_entries(path)
-        try:
-            with open(path, "a", encoding="utf-8") as f:
-                for offset, (name, key_bytes) in enumerate(to_append):
-                    idx = existing_indexed + offset
-                    f.write(f"{idx}: {name} [{key_bytes.hex()}]\n")
-        except OSError as exc:
-            import sys
-            print(f"Warning: could not write to {path!r}: {exc}", file=sys.stderr)
-
-    return to_append
-
-
-def _count_indexed_entries(path: str) -> int:
-    """Count how many 'N: Name [hex]' lines exist in *path* to determine next index."""
-    count = 0
-    try:
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                if _GET_CHANNELS_RE.match(line.strip()):
-                    count += 1
-    except OSError:
-        pass
-    return count
-
 
 def build_channel_lookup(
     channels: list[tuple[str, bytes]],
