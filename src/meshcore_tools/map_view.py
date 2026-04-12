@@ -398,7 +398,15 @@ class MapSidePanel(Vertical):
             w = Static("[dim]Fetching map tiles…[/dim]", markup=True)
             map_body.mount(w)
             self._map_widget = w
-            self._fetch_tiles(placed, path_coords, map_body.size.width, map_body.size.height)
+            self.call_after_refresh(self._start_fetch, placed, path_coords)
+
+    def _start_fetch(
+        self,
+        placed: list[tuple[str, str, float, float]],
+        path_coords: list[tuple[float, float]],
+    ) -> None:
+        map_body = self.query_one("#map_side_body", Container)
+        self._fetch_tiles(placed, path_coords, map_body.size.width, map_body.size.height)
 
     @work(thread=True, exclusive=True)
     def _fetch_tiles(
