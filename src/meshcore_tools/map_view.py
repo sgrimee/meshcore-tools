@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import logging
 
@@ -21,6 +22,10 @@ from textual.widgets import DataTable, Static
 
 from meshcore_tools.db import is_blacklisted, resolve_name
 from meshcore_tools.decoder import GROUP_TYPES, decode_packet
+from meshcore_tools.disambiguation import resolve_path_hops
+
+if TYPE_CHECKING:
+    from meshcore_tools.disambiguation import ResolvedHop
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +66,10 @@ def _lookup_coords(node_id: str, db: dict) -> tuple[float, float] | None:
 
 
 def collect_map_nodes(
-    packet: dict, db: dict, blacklist: list[str] | None = None
+    packet: dict,
+    db: dict,
+    blacklist: list[str] | None = None,
+    resolved_hops: list["ResolvedHop"] | None = None,
 ) -> tuple[list[tuple[str, str, float, float]], list[str], list[tuple[float, float]]]:
     """Collect nodes involved in a packet with their coordinates.
 
@@ -132,8 +140,34 @@ def collect_map_nodes(
         relays = full_path
     else:
         relays = full_path if is_direct else full_path[1:]
-    for hop in relays:
-        add_node(hop, "relay")
+
+    if resolved_hops is not None:
+        # Use pre-resolved hop data for relay nodes
+        for hop in resolved_hops:
+            # Determine key to check for blacklist
+            check_key = hop.resolved_key if hop.resolved_key is not None else hop.raw_hash
+            if is_blacklisted(check_key, db, bl):
+                logger.debug(
+                    "blacklist: skipping resolved relay hop %s (%s) in map",
+                    check_key,
+                    hop.name,
+                )
+                continue
+            if hop.lat is not None and hop.lon is not None:
+                lat, lon = hop.lat, hop.lon
+                for i, (_, r, elat, elon) in enumerate(placed):
+                    if elat == lat and elon == lon:
+                        if _ROLE_PRIORITY["relay"] < _ROLE_PRIORITY[r]:
+                            placed[i] = (hop.name, "relay", lat, lon)
+                        break
+                else:
+                    placed.append((hop.name, "relay", lat, lon))
+            else:
+                if hop.name not in unplaced:
+                    unplaced.append(hop.name)
+    else:
+        for hop in relays:
+            add_node(hop, "relay")
 
     dest_hash = payload_dec.get("dest_hash", "")
     if dest_hash:
@@ -366,7 +400,19 @@ class MapSidePanel(Vertical):
     def load_packet(self, packets: list[dict], index: int, db: dict, blacklist: list[str] | None = None) -> None:
         """Render the map for packets[index]."""
         p = packets[index]
-        placed, unplaced, path_coords = collect_map_nodes(p, db, blacklist)
+        dec = p.get("_decoded") or {}
+        payload_dec = dec.get("decoded") or {}
+        full_path = dec.get("path") or p.get("_path") or []
+        src_hash = payload_dec.get("src_hash", "") or p.get("_src_hash", "")
+        observer_id = p.get("origin_id", "")
+        resolved = resolve_path_hops(
+            full_path,
+            db,
+            blacklist=blacklist,
+            source_hash=src_hash or None,
+            observer_id=observer_id or None,
+        )
+        placed, unplaced, path_coords = collect_map_nodes(p, db, blacklist, resolved_hops=resolved)
 
         self.query_one("#map_side_header", Static).update(
             f"[dim]Packet {index + 1}/{len(packets)}[/dim]"
@@ -500,7 +546,19 @@ class PacketMapScreen(ModalScreen):
     def _refresh_map(self) -> None:
         p = self._packets[self._index]
         n = len(self._packets)
-        placed, unplaced, path_coords = collect_map_nodes(p, self._db, self._blacklist)
+        dec = p.get("_decoded") or {}
+        payload_dec = dec.get("decoded") or {}
+        full_path = dec.get("path") or p.get("_path") or []
+        src_hash = payload_dec.get("src_hash", "") or p.get("_src_hash", "")
+        observer_id = p.get("origin_id", "")
+        resolved = resolve_path_hops(
+            full_path,
+            self._db,
+            blacklist=self._blacklist,
+            source_hash=src_hash or None,
+            observer_id=observer_id or None,
+        )
+        placed, unplaced, path_coords = collect_map_nodes(p, self._db, self._blacklist, resolved_hops=resolved)
 
         self.query_one("#map_header", Static).update(
             f"[dim]({self._index + 1}/{n}  ↑↓ navigate  q/Esc close)[/dim]"
