@@ -2,6 +2,7 @@
 
 import struct
 
+from meshcore_tools.disambiguation import ResolvedHop
 from meshcore_tools.map_view import _lookup_coords, collect_map_nodes
 
 
@@ -149,3 +150,52 @@ def test_collect_map_nodes_dedup_same_coords():
     placed, _, _ = collect_map_nodes(packet, db)
     assert len(placed) == 1
     assert placed[0][1] == "source"
+
+
+# ---------------------------------------------------------------------------
+# collect_map_nodes — resolved_hops parameter
+# ---------------------------------------------------------------------------
+
+def test_collect_map_nodes_uses_resolved_hops():
+    """collect_map_nodes places relay using ResolvedHop name and coords, not DB lookup."""
+    relay_hash = "bbbbbbbb"
+    src_hash = "aaaaaaaa"
+
+    # DB has a different name and no coords for the relay
+    db = {
+        "nodes": {
+            src_hash: {"lat": 49.0, "lon": 6.0, "name": "source-node"},
+            relay_hash: {"name": "db-relay-name"},
+        }
+    }
+
+    hop = ResolvedHop(
+        raw_hash=relay_hash,
+        resolved_key=relay_hash,
+        name="ResolvedRelay",
+        lat=49.5,
+        lon=6.5,
+        confidence="unique",
+    )
+
+    # Direct route: all path entries are relays
+    packet = {
+        "raw_data": "",
+        "_route_type": "Direct",
+        "_src_hash": src_hash,
+        "_path": [relay_hash],
+        "origin_id": "",
+    }
+
+    placed, unplaced, _ = collect_map_nodes(packet, db, resolved_hops=[hop])
+
+    labels = [label for label, _, _, _ in placed]
+    assert "ResolvedRelay" in labels
+    # DB name for relay must NOT appear (resolved name took precedence)
+    assert "db-relay-name" not in labels
+
+    # Verify the resolved coords were used
+    relay_entry = next((e for e in placed if e[0] == "ResolvedRelay"), None)
+    assert relay_entry is not None
+    assert abs(relay_entry[2] - 49.5) < 0.001
+    assert abs(relay_entry[3] - 6.5) < 0.001

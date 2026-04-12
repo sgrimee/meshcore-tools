@@ -2,7 +2,8 @@
 
 from unittest.mock import MagicMock
 
-from meshcore_tools.monitor import MonitorTab, _build_detail_text
+from meshcore_tools.disambiguation import ResolvedHop
+from meshcore_tools.monitor import MonitorTab, _build_detail_text, format_path
 
 
 def _make_provider():
@@ -258,3 +259,44 @@ def test_build_detail_subrow_shows_observation_header():
     text = _build_detail_text(view, {})
     assert "Observation 2 of 3" in text
     assert "Observers" not in text
+
+
+# ---------------------------------------------------------------------------
+# format_path — resolved_hops parameter
+# ---------------------------------------------------------------------------
+
+def test_format_path_uses_resolved_hop_name():
+    """format_path uses ResolvedHop.name instead of DB lookup when resolved_hops provided."""
+    relay_hash = "bbbbbbbb"
+    src_hash = "aaaaaaaa"
+
+    # DB has a different name for the relay node
+    db = {
+        "nodes": {
+            relay_hash: {"name": "db-relay-name"},
+            src_hash: {"name": "source-node"},
+        }
+    }
+
+    hop = ResolvedHop(
+        raw_hash=relay_hash,
+        resolved_key=relay_hash,
+        name="ResolvedNode",
+        lat=None,
+        lon=None,
+        confidence="unique",
+    )
+
+    # Direct route: all path entries are relays; provide src_hash explicitly
+    result = format_path(
+        path_list=[relay_hash],
+        db=db,
+        resolve=2,
+        src_hash=src_hash,
+        route_type="Direct",
+        resolved_hops=[hop],
+    )
+
+    assert "ResolvedNode" in result
+    # The DB name for the relay must NOT appear (resolved name took precedence)
+    assert "db-relay-name" not in result
