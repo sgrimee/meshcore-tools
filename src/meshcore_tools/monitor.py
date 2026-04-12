@@ -38,7 +38,8 @@ MAX_PACKETS = 500
 def format_path(path_list: list, db: dict, resolve: int = 2,
                 src_hash: str = "", route_type: str = "",
                 hop_size: int = 1, ptype: str = "",
-                blacklist: list[str] | None = None) -> str:
+                blacklist: list[str] | None = None,
+                resolved_hops: "list[ResolvedHop] | None" = None) -> str:
     """Format: source → relay1 → relay2 → ...
 
     resolve: 2 = all names, 1 = source name + relay hex, 0 = all hex.
@@ -51,13 +52,23 @@ def format_path(path_list: list, db: dict, resolve: int = 2,
                When a node has multiple DB matches (address collision), blacklisted
                names are removed from the display; the node is hidden only if ALL
                its names are blacklisted.
+    resolved_hops: optional pre-resolved hop data from resolve_path_hops(). When
+                   provided and length matches path_list, used instead of live DB
+                   lookups for relay hops.
     """
     bl = blacklist or []
     is_direct = route_type in ("Direct", "TransportDirect")
     is_group = ptype in GROUP_TYPES
 
+    use_resolved = resolved_hops is not None and len(resolved_hops) == len(path_list)
+
     def _fmt(display: str, node_id: str) -> str:
         return f"[yellow]{display}[/yellow]" if is_input_node(node_id, db) else display
+
+    def _fmt_resolved(display: str, resolved_key: str | None) -> str:
+        if resolved_key is not None and is_input_node(resolved_key, db):
+            return f"[yellow]{display}[/yellow]"
+        return display
 
     def _resolve(node_id: str) -> str | None:
         """Resolve node_id to display name, filtering blacklisted names out.
@@ -88,15 +99,27 @@ def format_path(path_list: list, db: dict, resolve: int = 2,
     # For group types all path entries are forwarders (no reliable source in path).
     if is_group and not is_direct:
         relays = path_list
+        relay_resolved: list[ResolvedHop] | None = resolved_hops if use_resolved else None
     else:
         relays = path_list if is_direct else path_list[1:]
+        if use_resolved:
+            relay_resolved = resolved_hops if is_direct else resolved_hops[1:]  # type: ignore[index]
+        else:
+            relay_resolved = None
 
     if not relays:
         return src
 
     relay_parts: list[str] = []
-    for hop in relays:
-        if resolve >= 2:
+    for i, hop in enumerate(relays):
+        if relay_resolved is not None and i < len(relay_resolved):
+            rh = relay_resolved[i]
+            if rh.confidence != "ambiguous":
+                relay_parts.append(_fmt_resolved(rh.name, rh.resolved_key))
+            else:
+                # ambiguous: show the combined name with ? suffix, no highlighting
+                relay_parts.append(rh.name)
+        elif resolve >= 2:
             name = _resolve(hop)
             if name is None:
                 continue
@@ -886,12 +909,21 @@ class MonitorTab(TabPane):
         raw_path = view.get("_path") or []
         decrypted = view.get("_decrypted") or {}
         src_display = decrypted.get("sender", "") or view.get("_src_hash", "")
+        from meshcore_tools.disambiguation import resolve_path_hops
+        resolved_hops = resolve_path_hops(
+            raw_path,
+            self._db,
+            blacklist=self._blacklist,
+            source_hash=src_display or None,
+            observer_id=view.get("origin_id") or None,
+        )
         path = format_path(raw_path, self._db, resolve=self._resolve_path,
                            src_hash=src_display,
                            route_type=view.get("_route_type", ""),
                            hop_size=view.get("_path_hop_size", 1),
                            ptype=view.get("payload_type", ""),
-                           blacklist=self._blacklist)
+                           blacklist=self._blacklist,
+                           resolved_hops=resolved_hops)
         if self._wrap_path:
             lines = textwrap.wrap(path, width=max(20, wrap_width)) or [path]
             path_cell = Text.from_markup("\n".join(lines))
