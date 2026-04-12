@@ -493,6 +493,8 @@ class MonitorTab(TabPane):
         Binding("n", "toggle_names", "Names"),
         Binding("w", "toggle_wrap", "Wrap"),
         Binding("c", "clear", "Clear"),
+        Binding("right", "expand_packet", show=False, priority=True),
+        Binding("left", "collapse_packet", show=False, priority=True),
     ]
     DEFAULT_CSS = """
     /* === Main layout (right-panel mode, default) === */
@@ -624,7 +626,7 @@ class MonitorTab(TabPane):
     def on_mount(self) -> None:
         self._db = load_db()
         table = self.query_one("#packets", DataTable)
-        table.add_columns("Time", "Observer", "Type", "SNR", "RSSI", "Src→Relays")
+        table.add_columns("Time", "Observer", "Type", "SNR", "RSSI", "Path")
         table.cursor_type = "row"
         self._set_status(None)
         self._poll_worker()
@@ -800,6 +802,27 @@ class MonitorTab(TabPane):
                 return None
         return self._packets_by_id.get(key)
 
+    def _current_pid(self) -> str | None:
+        """Return the parent packet ID for the currently highlighted row, or None."""
+        table = self.query_one("#packets", DataTable)
+        row = table.cursor_row
+        if row >= len(self._row_keys):
+            return None
+        return self._row_keys[row].split("::")[0]
+
+    def _set_expanded(self, pid: str, expanded: bool) -> None:
+        """Expand or collapse a multi-observer packet and rebuild the table."""
+        p = self._packets_by_id.get(pid)
+        if not p or len(p.get("_observers") or []) <= 1:
+            return
+        if expanded == (pid in self._expanded):
+            return
+        if expanded:
+            self._expanded.add(pid)
+        else:
+            self._expanded.discard(pid)
+        self._rebuild_table()
+
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Toggle expand/collapse when Enter is pressed on a multi-observer parent row."""
         row = event.cursor_row
@@ -808,13 +831,17 @@ class MonitorTab(TabPane):
         key = self._row_keys[row]
         if "::" in key:
             return  # sub-row: do nothing on Enter
-        p = self._packets_by_id.get(key)
-        if p and len(p.get("_observers") or []) > 1:
-            if key in self._expanded:
-                self._expanded.discard(key)
-            else:
-                self._expanded.add(key)
-            self._rebuild_table()
+        self._set_expanded(key, key not in self._expanded)
+
+    def action_expand_packet(self) -> None:
+        """Expand the current multi-observer packet (right arrow)."""
+        if pid := self._current_pid():
+            self._set_expanded(pid, True)
+
+    def action_collapse_packet(self) -> None:
+        """Collapse the current multi-observer packet (left arrow)."""
+        if pid := self._current_pid():
+            self._set_expanded(pid, False)
 
     def _add_packet_row(self, table: DataTable, view: dict, row_key: str,
                         node_cell: "Text", wrap_width: int) -> None:
