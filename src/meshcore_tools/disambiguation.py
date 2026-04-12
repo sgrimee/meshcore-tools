@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import itertools
 import math
 from dataclasses import dataclass, field
 from typing import Literal
+
+UNKNOWN_COORD_PENALTY = 10.0
+GEO_CONFIDENCE_THRESHOLD = 0.5
+_MAX_COMBOS = 1000
+_LORA_HARD_CUTOFF_KM = 150.0
 
 
 @dataclass
@@ -118,3 +124,135 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     dλ = math.radians(lon2 - lon1)
     a = math.sin(dφ / 2) ** 2 + math.cos(φ1) * math.cos(φ2) * math.sin(dλ / 2) ** 2
     return R * 2 * math.asin(math.sqrt(a))
+
+
+def _score_transition(
+    coord_a: tuple[float, float] | None,
+    coord_b: tuple[float, float] | None,
+) -> float:
+    """Score the transition cost between two consecutive hops.
+
+    Returns:
+    - UNKNOWN_COORD_PENALTY if either coord is None
+    - math.inf if distance > _LORA_HARD_CUTOFF_KM (physically impossible for LoRa)
+    - sigmoid decay: 1 / (1 + exp(-(d - 50) / 20)) otherwise
+      near-0 cost below ~30 km, 0.5 at 50 km, near-1.0 above ~80 km
+    """
+    if coord_a is None or coord_b is None:
+        return UNKNOWN_COORD_PENALTY
+    d = _haversine_km(coord_a[0], coord_a[1], coord_b[0], coord_b[1])
+    if d > _LORA_HARD_CUTOFF_KM:
+        return math.inf
+    return 1.0 / (1.0 + math.exp(-(d - 50.0) / 20.0))
+
+
+def _score_candidate_sequence(
+    sequence: list[str],
+    spatial_index: dict[str, tuple[float, float]],
+    source_coords: tuple[float, float] | None,
+    observer_coords: tuple[float, float] | None,
+) -> float:
+    """Score a full candidate sequence by summing transition costs.
+
+    Builds the chain: source → seq[0] → seq[1] → ... → seq[-1] → observer
+    (anchors are only included when not None).
+    Each adjacent pair contributes _score_transition(coords_a, coords_b).
+    """
+    coords: list[tuple[float, float] | None] = []
+    if source_coords is not None:
+        coords.append(source_coords)
+    for key in sequence:
+        coords.append(spatial_index.get(key))
+    if observer_coords is not None:
+        coords.append(observer_coords)
+
+    return sum(
+        _score_transition(coords[i], coords[i + 1]) for i in range(len(coords) - 1)
+    )
+
+
+def _resolve_ambiguous_hops_by_geometry(
+    hops: list[ResolvedHop],
+    spatial_index: dict[str, tuple[float, float]],
+    source_coords: tuple[float, float] | None,
+    observer_coords: tuple[float, float] | None,
+) -> list[ResolvedHop]:
+    """Try to resolve ambiguous hops using geographic scoring.
+
+    Algorithm:
+    1. If total candidate combinations > _MAX_COMBOS: return hops unchanged
+    2. If no candidate has coordinates AND no anchor coords: return unchanged
+    3. Enumerate all combinations (ambiguous hops vary, unique hops are fixed)
+    4. Score each combination with _score_candidate_sequence
+    5. Pick the winning combination (lowest score)
+    6. If winning score is +inf, use lowest finite score instead (if any)
+    7. Apply winning combination:
+       - confidence="geo_selected" if score delta vs runner-up > GEO_CONFIDENCE_THRESHOLD
+       - confidence="ambiguous" otherwise (best guess but not confident)
+    8. Return the updated hops list (non-ambiguous hops are returned unchanged)
+    """
+    # Step 1: check combo count
+    combo_count = 1
+    for hop in hops:
+        combo_count *= len(hop.candidates) if hop.candidates else 1
+    if combo_count > _MAX_COMBOS:
+        return hops
+
+    # Step 2: check if any useful coords exist
+    all_candidate_keys = [key for hop in hops for key in hop.candidates]
+    has_any_coords = (
+        any(key in spatial_index for key in all_candidate_keys)
+        or source_coords is not None
+        or observer_coords is not None
+    )
+    if not has_any_coords:
+        return hops
+
+    # Step 3 & 4: enumerate and score all combinations
+    candidate_lists = [hop.candidates if hop.candidates else [] for hop in hops]
+    scored: list[tuple[float, tuple[str, ...]]] = []
+    for combo in itertools.product(*candidate_lists):
+        score = _score_candidate_sequence(list(combo), spatial_index, source_coords, observer_coords)
+        scored.append((score, combo))
+
+    if not scored:
+        return hops
+
+    # Step 5 & 6: pick winner (lowest score, prefer finite)
+    scored.sort(key=lambda x: (math.isinf(x[0]), x[0]))
+    best_score, best_combo = scored[0]
+
+    # Determine runner-up score for confidence threshold
+    runner_up_score = scored[1][0] if len(scored) > 1 else best_score
+
+    # Step 7: apply winning combination
+    confident = (
+        not math.isinf(best_score)
+        and not math.isinf(runner_up_score)
+        and (runner_up_score - best_score) > GEO_CONFIDENCE_THRESHOLD
+    )
+    new_confidence: Literal["geo_selected", "ambiguous"] = (
+        "geo_selected" if confident else "ambiguous"
+    )
+
+    updated: list[ResolvedHop] = []
+    for hop, chosen_key in zip(hops, best_combo):
+        if hop.confidence == "ambiguous":
+            coords = spatial_index.get(chosen_key)
+            # Find name from original candidates list via the hop's raw data
+            # We need to look up the name; it's not stored per-key in ResolvedHop.
+            # Use the key prefix as fallback name — caller can re-resolve if needed.
+            name = chosen_key[:8]
+            updated.append(ResolvedHop(
+                raw_hash=hop.raw_hash,
+                resolved_key=chosen_key,
+                name=name,
+                lat=coords[0] if coords else None,
+                lon=coords[1] if coords else None,
+                confidence=new_confidence,
+                candidates=hop.candidates,
+            ))
+        else:
+            updated.append(hop)
+
+    return updated
