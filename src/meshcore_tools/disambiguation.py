@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -96,3 +97,24 @@ def resolve_path_hops(
             ))
 
     return results
+
+
+def _build_spatial_index(db: dict) -> dict[str, tuple[float, float]]:
+    """Return {full_key: (lat, lon)} for all nodes with coordinates."""
+    index: dict[str, tuple[float, float]] = {}
+    for key, entry in db.get("nodes", {}).items():
+        lat = entry.get("lat")
+        lon = entry.get("lon")
+        if lat is not None and lon is not None:
+            index[key] = (float(lat), float(lon))
+    return index
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Return great-circle distance in km using the Haversine formula."""
+    R = 6371.0
+    φ1, φ2 = math.radians(lat1), math.radians(lat2)
+    dφ = math.radians(lat2 - lat1)
+    dλ = math.radians(lon2 - lon1)
+    a = math.sin(dφ / 2) ** 2 + math.cos(φ1) * math.cos(φ2) * math.sin(dλ / 2) ** 2
+    return R * 2 * math.asin(math.sqrt(a))
