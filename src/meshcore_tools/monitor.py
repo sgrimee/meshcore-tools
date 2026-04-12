@@ -20,6 +20,7 @@ from textual.worker import get_current_worker
 
 if TYPE_CHECKING:
     from meshcore_tools.providers import PacketProvider
+    from meshcore_tools.disambiguation import ResolvedHop
 
 from meshcore_tools.channels import build_channel_lookup, try_decrypt
 from meshcore_tools.db import is_input_node, learn_from_advert, load_db, resolve_name, resolve_name_filtered, save_db
@@ -141,11 +142,13 @@ def _fmt_hash(h: str, db: dict, hop_size: int = 1) -> str:
 def _path_detail_lines(
     full_path: list, db: dict, hop_size: int,
     src_hash: str, route_type: str, ptype: str, dest_hash: str,
+    resolved_hops: list["ResolvedHop"] | None = None,
 ) -> list[str]:
     """Return one formatted line per path hop for the detail view.
 
     Each line: '  hex  name  [dim](role)[/dim]'
     Roles: (src), (dest) — relays have no role label.
+    When resolved_hops is provided, relay hops show confidence indicators.
     """
     is_direct = route_type in ("Direct", "TransportDirect")
     is_group = ptype in GROUP_TYPES
@@ -154,6 +157,18 @@ def _path_detail_lines(
     def _hop_line(node_id: str, role: str = "") -> str:
         role_str = f"  [dim]({role})[/dim]" if role else ""
         return f"  {_fmt_hash(node_id, db, hop_size)}{role_str}"
+
+    def _resolved_relay_line(hop: "ResolvedHop") -> str:
+        hex_prefix = hop.raw_hash[: hop_size * 2]
+        if hop.confidence == "unique":
+            confidence_suffix = ""
+        elif hop.confidence == "geo_selected":
+            confidence_suffix = " [dim](geo)[/dim]"
+        elif hop.confidence == "ambiguous":
+            confidence_suffix = " [dim](ambiguous)[/dim]"
+        else:  # "unknown"
+            return f"  [dim]{hex_prefix}[/dim]  {hop.name}"
+        return f"  [dim]{hex_prefix}[/dim]  {hop.name}{confidence_suffix}"
 
     # Source
     if src_hash:
@@ -171,8 +186,12 @@ def _path_detail_lines(
     else:
         relay_hops = full_path if is_direct else full_path[1:]
 
-    for hop in relay_hops:
-        lines.append(_hop_line(hop))
+    if resolved_hops is not None and len(resolved_hops) == len(relay_hops):
+        for hop in resolved_hops:
+            lines.append(_resolved_relay_line(hop))
+    else:
+        for hop in relay_hops:
+            lines.append(_hop_line(hop))
 
     # Destination
     if dest_hash:
@@ -217,6 +236,14 @@ def _build_detail_text(packet: dict, db: dict) -> str:
     advert_pubkey = payload_dec.get("public_key", "") if ptype == "Advert" else ""
     dest_hash = payload_dec.get("dest_hash", "")
 
+    from meshcore_tools.disambiguation import resolve_path_hops
+    resolved_hops = resolve_path_hops(
+        full_path,
+        db,
+        source_hash=advert_pubkey or src_hash or None,
+        observer_id=p.get("origin_id") or None,
+    )
+
     lines.append(f"[dim]Path:[/dim]       [dim]({hop_size}-byte addresses)[/dim]")
     lines.extend(_path_detail_lines(
         full_path, db, hop_size,
@@ -224,6 +251,7 @@ def _build_detail_text(packet: dict, db: dict) -> str:
         route_type=route,
         ptype=ptype,
         dest_hash=dest_hash,
+        resolved_hops=resolved_hops,
     ))
 
     # Surface decrypted sender for GroupText when available
