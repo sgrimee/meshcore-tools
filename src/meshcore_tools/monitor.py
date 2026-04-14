@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 from meshcore_tools.channels import build_channel_lookup, try_decrypt
 from meshcore_tools.db import is_input_node, learn_from_advert, load_db, resolve_name, resolve_name_filtered, save_db
 from meshcore_tools.decoder import GROUP_TYPES, decode_packet
+from meshcore_tools.disambiguation import resolve_path_hops
 from meshcore_tools.map_view import MapSidePanel, PacketMapScreen
 from meshcore_tools.resize_handle import ResizeHandle
 
@@ -259,7 +260,6 @@ def _build_detail_text(packet: dict, db: dict) -> str:
     advert_pubkey = payload_dec.get("public_key", "") if ptype == "Advert" else ""
     dest_hash = payload_dec.get("dest_hash", "")
 
-    from meshcore_tools.disambiguation import resolve_path_hops
     resolved_hops = resolve_path_hops(
         full_path,
         db,
@@ -909,7 +909,6 @@ class MonitorTab(TabPane):
         raw_path = view.get("_path") or []
         decrypted = view.get("_decrypted") or {}
         src_display = decrypted.get("sender", "") or view.get("_src_hash", "")
-        from meshcore_tools.disambiguation import resolve_path_hops
         resolved_hops = resolve_path_hops(
             raw_path,
             self._db,

@@ -131,11 +131,12 @@ def test_collect_map_nodes_path_segments_order():
     src_key = "aa" * 4
     relay_key = "bb" * 4
     obs_key = "cc" * 4
+    # Use coordinates ~11 km apart (well within the 150 km LoRa guard)
     db = {
         "nodes": {
-            src_key: {"lat": 1.0, "lon": 1.0, "name": "src"},
-            relay_key: {"lat": 2.0, "lon": 2.0, "name": "relay"},
-            obs_key: {"lat": 3.0, "lon": 3.0, "name": "obs"},
+            src_key: {"lat": 49.0, "lon": 6.0, "name": "src"},
+            relay_key: {"lat": 49.1, "lon": 6.0, "name": "relay"},
+            obs_key: {"lat": 49.2, "lon": 6.0, "name": "obs"},
         }
     }
     # For Direct: all path entries are relays; src_hash is explicit
@@ -150,10 +151,10 @@ def test_collect_map_nodes_path_segments_order():
     assert len(path_segments) == 2
     start0, end0, solid0 = path_segments[0]
     start1, end1, solid1 = path_segments[1]
-    assert start0 == (1.0, 1.0)   # source
-    assert end0 == (2.0, 2.0)     # relay
-    assert start1 == (2.0, 2.0)   # relay
-    assert end1 == (3.0, 3.0)     # observer
+    assert start0 == (49.0, 6.0)   # source
+    assert end0 == (49.1, 6.0)     # relay
+    assert start1 == (49.1, 6.0)   # relay
+    assert end1 == (49.2, 6.0)     # observer
     assert solid0 is True
     assert solid1 is True
 
@@ -233,12 +234,13 @@ def test_path_segments_solid_when_all_relays_placed():
     r1_key = "bb" * 4
     r2_key = "cc" * 4
     obs_key = "dd" * 4
+    # Use coordinates ~5.5 km apart (well within the 150 km LoRa guard)
     db = {
         "nodes": {
-            src_key: {"lat": 1.0, "lon": 1.0, "name": "src"},
-            r1_key: {"lat": 2.0, "lon": 2.0, "name": "r1"},
-            r2_key: {"lat": 3.0, "lon": 3.0, "name": "r2"},
-            obs_key: {"lat": 4.0, "lon": 4.0, "name": "obs"},
+            src_key: {"lat": 49.0, "lon": 6.0, "name": "src"},
+            r1_key: {"lat": 49.05, "lon": 6.0, "name": "r1"},
+            r2_key: {"lat": 49.1, "lon": 6.0, "name": "r2"},
+            obs_key: {"lat": 49.15, "lon": 6.0, "name": "obs"},
         }
     }
     packet = {
@@ -350,14 +352,15 @@ def test_collect_map_nodes_remote_coords_resolves_unplaced():
     src_key = "aa" * 4
     relay_key = "bb" * 32  # 64-char key
     obs_key = "cc" * 4
+    # Use coordinates ~11 km apart (well within the 150 km LoRa guard)
     db = {
         "nodes": {
-            src_key: {"lat": 1.0, "lon": 1.0, "name": "src"},
+            src_key: {"lat": 49.0, "lon": 6.0, "name": "src"},
             relay_key: {"name": "relay-no-gps"},  # in DB but no lat/lon
-            obs_key: {"lat": 3.0, "lon": 3.0, "name": "obs"},
+            obs_key: {"lat": 49.2, "lon": 6.0, "name": "obs"},
         }
     }
-    remote = {relay_key: {"lat": 2.0, "lon": 2.0}}
+    remote = {relay_key: {"lat": 49.1, "lon": 6.0}}
     hop = ResolvedHop(
         raw_hash=relay_key[:4],
         resolved_key=relay_key,
@@ -547,3 +550,48 @@ def test_no_local_match_relay_not_placed_via_remote_coords():
     )
     relay_lats = [lat for _, role, lat, _ in placed if role == "relay"]
     assert not relay_lats, "Relay with no local DB match must not be placed via remote_coords"
+
+
+def test_relay_beyond_lora_range_not_placed():
+    """A relay >150 km from all anchors must be rejected even when it has a full key.
+
+    This is the case seen in the screenshot: a node with a full 64-char key has
+    remote_coords in North America while the path is entirely in Luxembourg.
+    The 150 km hard LoRa cutoff must prevent the placement.
+    """
+    src_key = "aa" * 32   # 64-char key, Luxembourg
+    obs_key = "cc" * 32   # 64-char key, Luxembourg
+    relay_key = "bb" * 32  # 64-char key, node named "08" or similar
+
+    db = {
+        "nodes": {
+            src_key: {"lat": 49.6, "lon": 6.1, "name": "src-lux"},
+            obs_key: {"lat": 49.7, "lon": 6.2, "name": "obs-lux"},
+            relay_key: {"name": "08"},  # in local DB, no local coords
+        }
+    }
+    # Remote has this node at a North American location (~5500 km away)
+    remote = {relay_key: {"lat": 45.4, "lon": -75.7}}  # Ottawa, Canada
+
+    hop = ResolvedHop(
+        raw_hash=relay_key[:4],
+        resolved_key=relay_key,
+        name="08",
+        lat=None,
+        lon=None,
+        confidence="unique",
+    )
+    packet = {
+        "raw_data": "",
+        "_route_type": "Flood",
+        "_src_hash": src_key,
+        "_path": [src_key, relay_key[:4]],
+        "origin_id": obs_key,
+    }
+    placed, unplaced, _ = collect_map_nodes(
+        packet, db, resolved_hops=[hop], remote_coords=remote
+    )
+    relay_lats = [lat for _, role, lat, _ in placed if role == "relay"]
+    assert not relay_lats, (
+        f"Relay >150 km from all anchors must be rejected (got lats: {relay_lats})"
+    )

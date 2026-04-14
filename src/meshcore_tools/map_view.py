@@ -113,6 +113,45 @@ def _route_order_to_segments(
 # Coordinate helpers
 # ---------------------------------------------------------------------------
 
+# Hard physical LoRa range limit: matches _LORA_HARD_CUTOFF_KM in disambiguation.py
+_RELAY_MAX_KM = 150.0
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in km (Haversine)."""
+    R = 6371.0
+    φ1, φ2 = math.radians(lat1), math.radians(lat2)
+    dφ, dλ = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
+    a = math.sin(dφ / 2) ** 2 + math.cos(φ1) * math.cos(φ2) * math.sin(dλ / 2) ** 2
+    return R * 2 * math.asin(math.sqrt(a))
+
+
+def _guard_relay_range(
+    coords: tuple[float, float] | None,
+    anchors: list[tuple[float, float]],
+    label: str,
+    max_dist_km: float = _RELAY_MAX_KM,
+) -> tuple[float, float] | None:
+    """Return None when coords are physically impossible for a LoRa relay.
+
+    A relay is rejected when at least one anchor is known AND the candidate
+    position is more than max_dist_km from every anchor.  When no anchors
+    are available the coords are returned unchanged (graceful degradation).
+    """
+    if coords is None or not anchors:
+        return coords
+    if any(
+        _haversine_km(coords[0], coords[1], a[0], a[1]) <= max_dist_km
+        for a in anchors
+    ):
+        return coords
+    logger.debug(
+        "map: relay %r at %s rejected — >%.0f km from all anchors",
+        label, coords, max_dist_km,
+    )
+    return None
+
+
 def _lookup_coords(
     node_id: str,
     db: dict,
@@ -154,8 +193,14 @@ def collect_map_nodes(
     blacklist: list[str] | None = None,
     resolved_hops: list["ResolvedHop"] | None = None,
     remote_coords: dict[str, dict] | None = None,
+    max_relay_dist_km: float = _RELAY_MAX_KM,
 ) -> tuple[list[tuple[str, str, float, float]], list[str], list[PathSegment]]:
     """Collect nodes involved in a packet with their coordinates.
+
+    Args:
+        max_relay_dist_km: Hard cut-off (km) beyond which a relay is treated as
+            unplaced.  Defaults to _RELAY_MAX_KM (150 km — hard LoRa limit).
+            Set to math.inf to disable the geographic plausibility check.
 
     Returns:
         placed:        list of (label, role, lat, lon)
@@ -252,6 +297,11 @@ def collect_map_nodes(
         add_node(origin_id, "observer")
 
     # --- Relays ---
+    # Anchor coords for the LoRa range guard: source and observer placed above.
+    _anchors: list[tuple[float, float]] = [
+        (lat, lon) for _, r, lat, lon in placed if r in ("source", "observer")
+    ]
+
     if is_group and not is_direct:
         relays = full_path
     else:
@@ -289,7 +339,7 @@ def collect_map_nodes(
                     relay_coords = _lookup_coords(full_relay_key, db, rc)
                 else:
                     relay_coords = None
-                add_relay(label, relay_coords)
+                add_relay(label, _guard_relay_range(relay_coords, _anchors, label, max_relay_dist_km))
                 continue
 
             check_key = rh.resolved_key if rh.resolved_key is not None else relay_id
@@ -322,7 +372,7 @@ def collect_map_nodes(
                     relay_coords = _lookup_coords(key, db)
                 else:
                     relay_coords = None
-            add_relay(label, relay_coords)
+            add_relay(label, _guard_relay_range(relay_coords, _anchors, label))
     else:
         for hop in relays:
             if is_blacklisted(hop, db, bl):
@@ -345,7 +395,7 @@ def collect_map_nodes(
                 relay_coords = _lookup_coords(full_hop_key, db, rc)
             else:
                 relay_coords = None
-            add_relay(label, relay_coords)
+            add_relay(label, _guard_relay_range(relay_coords, _anchors, label))
 
     # --- Dest ---
     dest_hash = payload_dec.get("dest_hash", "")
