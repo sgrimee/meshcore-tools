@@ -71,7 +71,12 @@ def learn_from_advert(
 
 
 def parse_input_file(path) -> dict[str, dict]:
-    """Parse input file format: [N→]name  type  pubkey_hex  [routing...]"""
+    """Parse input file format: [N→]name  type  pubkey_hex  [routing]  [lat  lon]
+
+    lat and lon are optional.  When the last two whitespace-separated fields
+    after the key are both parseable as floats they are treated as geographic
+    coordinates; the remaining fields (if any) form the routing string.
+    """
     nodes = {}
     for line in Path(path).read_text().splitlines():
         line = re.sub(r"^\s*\d+→", "", line).strip()
@@ -81,16 +86,31 @@ def parse_input_file(path) -> dict[str, dict]:
         if len(parts) < 3:
             continue
         name, type_, key = parts[0], parts[1], parts[2].lower()
-        routing = " ".join(parts[3:]) if len(parts) > 3 else ""
         if not re.fullmatch(r"[0-9a-f]+", key):
             continue
-        nodes[key] = {
+        extra = parts[3:]
+        lat: float | None = None
+        lon: float | None = None
+        if len(extra) >= 2:
+            try:
+                lat_candidate = float(extra[-2])
+                lon_candidate = float(extra[-1])
+                lat, lon = lat_candidate, lon_candidate
+                extra = extra[:-2]
+            except ValueError:
+                pass
+        routing = " ".join(extra)
+        entry: dict = {
             "name": name,
             "type": type_,
             "routing": routing,
             "source": Path(path).name,
             "key_complete": len(key) == 64,
         }
+        if lat is not None and lon is not None and (lat != 0.0 or lon != 0.0):
+            entry["lat"] = lat
+            entry["lon"] = lon
+        nodes[key] = entry
     return nodes
 
 
@@ -216,6 +236,20 @@ def update(region: str, node_provider: NodeProvider, coord_provider: CoordProvid
         print(f"  {filled} nodes backfilled with coordinates")
     except Exception as e:
         print(f"  Warning: meshcore.dev coord fetch failed: {e}")
+
+    # Re-apply explicit coordinates from input files.  The API merge above
+    # replaces input-file entries with API data (which never carries coords),
+    # so any lat/lon written in an input file would otherwise be lost.
+    # This final pass reinstates them, including partial-key → full-key matches.
+    for f in sorted(INPUT_DIR.glob("*.txt")):
+        for input_key, input_data in parse_input_file(f).items():
+            if "lat" not in input_data:
+                continue
+            for db_key in db["nodes"]:
+                if db_key.startswith(input_key) or input_key.startswith(db_key[: len(input_key)]):
+                    db["nodes"][db_key]["lat"] = input_data["lat"]
+                    db["nodes"][db_key]["lon"] = input_data["lon"]
+                    break
 
     save_db(db)
     print(f"Database updated: {len(db['nodes'])} total nodes -> {DB_FILE}")
