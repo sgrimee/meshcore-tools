@@ -3,7 +3,7 @@
 import struct
 
 from meshcore_tools.disambiguation import ResolvedHop
-from meshcore_tools.map_view import _lookup_coords, collect_map_nodes
+from meshcore_tools.map_view import _build_footer, _lookup_coords, collect_map_nodes
 
 
 # ---------------------------------------------------------------------------
@@ -595,3 +595,157 @@ def test_relay_beyond_lora_range_not_placed():
     assert not relay_lats, (
         f"Relay >150 km from all anchors must be rejected (got lats: {relay_lats})"
     )
+
+
+# ---------------------------------------------------------------------------
+# _build_footer — unplaced node names
+# ---------------------------------------------------------------------------
+
+def test_build_footer_shows_node_names():
+    """Unplaced nodes are listed by name, not just counted."""
+    placed: list = []
+    unplaced = ["alpha", "beta"]
+    footer = _build_footer(placed, unplaced)
+    assert "alpha" in footer
+    assert "beta" in footer
+
+
+def test_build_footer_truncates_long_unplaced_list():
+    """More than 5 unplaced nodes show first 5 names plus overflow count."""
+    placed: list = []
+    unplaced = [f"node{i}" for i in range(8)]
+    footer = _build_footer(placed, unplaced)
+    # First 5 names visible, rest summarised
+    for i in range(5):
+        assert f"node{i}" in footer
+    assert "+3 more" in footer
+    # Names beyond the cutoff must not appear verbatim
+    for i in range(5, 8):
+        assert f"node{i}" not in footer
+
+
+def test_build_footer_exactly_five_unplaced_no_overflow():
+    """Exactly 5 unplaced nodes are all shown with no '+N more' suffix."""
+    placed: list = []
+    unplaced = [f"node{i}" for i in range(5)]
+    footer = _build_footer(placed, unplaced)
+    for i in range(5):
+        assert f"node{i}" in footer
+    assert "more" not in footer
+
+
+# ---------------------------------------------------------------------------
+# collect_map_nodes — Path packet dest_hash (dst_hash key fix)
+# ---------------------------------------------------------------------------
+
+def _make_path_packet_hex(src_hash: bytes, dst_hash: bytes) -> bytes:
+    """Build a minimal Flood+Path raw packet with the given src and dst hashes."""
+    hash_size = len(src_hash)
+    assert len(dst_hash) == hash_size
+    header = (0x08 << 2) | 0x01  # Flood | Path
+    # path_len byte: hash_size-1 in bits 7-6, 0 hops in bits 5-0
+    path_len_byte = ((hash_size - 1) << 6) | 0x00
+    payload = src_hash + dst_hash
+    return bytes([header, path_len_byte]) + payload
+
+
+def _path_packet_dict(src_key: str, dst_key: str, origin_id: str) -> dict:
+    """Build a pre-decoded Path packet dict."""
+    hash_size = 2  # 2-byte hashes for test clarity
+    src_bytes = bytes.fromhex(src_key[:hash_size * 2])
+    dst_bytes = bytes.fromhex(dst_key[:hash_size * 2])
+    raw_hex = _make_path_packet_hex(src_bytes, dst_bytes).hex()
+    return {
+        "raw_data": raw_hex,
+        "origin_id": origin_id,
+    }
+
+
+def test_collect_map_nodes_path_dest_placed():
+    """Path packets expose dst_hash; dest should be placed when coords are available."""
+    # Use 2-byte hashes → hash_size=2
+    src_key = "aa" * 32   # 64-char full key; first 4 hex chars = "aaaa"
+    dst_key = "bb" * 32   # first 4 hex chars = "bbbb"
+    obs_key = "cc" * 4
+
+    db = {
+        "nodes": {
+            src_key: {"lat": 49.0, "lon": 6.0, "name": "src-node"},
+            dst_key: {"lat": 49.1, "lon": 6.1, "name": "dst-node"},
+            obs_key: {"lat": 49.2, "lon": 6.2, "name": "obs-node"},
+        }
+    }
+    packet = _path_packet_dict(src_key, dst_key, obs_key)
+    placed, unplaced, _ = collect_map_nodes(packet, db)
+
+    roles = {role for _, role, _, _ in placed}
+    assert "dest" in roles, f"dest should be placed for Path packet; placed roles: {roles}"
+    dest_entry = next((e for e in placed if e[1] == "dest"), None)
+    assert dest_entry is not None
+    assert abs(dest_entry[2] - 49.1) < 0.001
+
+
+# ---------------------------------------------------------------------------
+# collect_map_nodes — geo-scoring for ambiguous 1-byte source/dest
+# ---------------------------------------------------------------------------
+
+def test_geo_scoring_resolves_ambiguous_source():
+    """When src_hash matches two DB nodes, the one within LoRa range is chosen."""
+    # Both nodes share the same 1-byte hash prefix "aa"
+    near_src  = "aa" * 4 + "11" * 28   # starts with "aa", geographically close
+    far_src   = "aa" * 4 + "22" * 28   # same 1-byte prefix, geographically far away
+    relay_key = "bb" * 4
+    obs_key   = "cc" * 4
+
+    # near_src is ~11 km from relay (within 150 km); far_src is on another continent
+    db = {
+        "nodes": {
+            near_src:  {"lat": 49.1, "lon": 6.0, "name": "near-source"},
+            far_src:   {"lat": -33.9, "lon": 151.2, "name": "far-source"},  # Sydney
+            relay_key: {"lat": 49.0, "lon": 6.0, "name": "relay"},
+            obs_key:   {"lat": 49.2, "lon": 6.0, "name": "observer"},
+        }
+    }
+    # Packet with 1-byte src_hash "aa" (matches both near_src and far_src)
+    packet = {
+        "raw_data": "",
+        "_route_type": "Flood",
+        "_src_hash": "aa",          # 1-byte → ambiguous without geo-scoring
+        "_path": [relay_key],
+        "origin_id": obs_key,
+    }
+    placed, unplaced, _ = collect_map_nodes(packet, db)
+
+    src_entries = [(label, lat, lon) for label, role, lat, lon in placed if role == "source"]
+    assert len(src_entries) == 1, (
+        f"Geo-scoring should select exactly one source; placed: {src_entries}"
+    )
+    assert "near-source" in src_entries[0][0]
+    assert "far-source" not in (label for label, _, _ in src_entries)
+
+
+def test_geo_scoring_leaves_ambiguous_source_unplaced():
+    """If two candidates are both within LoRa range, source stays unplaced."""
+    near1 = "aa" * 4 + "11" * 28
+    near2 = "aa" * 4 + "22" * 28
+    relay_key = "bb" * 4
+    obs_key   = "cc" * 4
+
+    db = {
+        "nodes": {
+            near1:     {"lat": 49.1, "lon": 6.0, "name": "near1"},
+            near2:     {"lat": 49.15, "lon": 6.05, "name": "near2"},  # also nearby
+            relay_key: {"lat": 49.0, "lon": 6.0, "name": "relay"},
+            obs_key:   {"lat": 49.2, "lon": 6.0, "name": "observer"},
+        }
+    }
+    packet = {
+        "raw_data": "",
+        "_route_type": "Flood",
+        "_src_hash": "aa",
+        "_path": [relay_key],
+        "origin_id": obs_key,
+    }
+    placed, unplaced, _ = collect_map_nodes(packet, db)
+    src_entries = [e for e in placed if e[1] == "source"]
+    assert not src_entries, "Both candidates in range → source must stay unplaced"

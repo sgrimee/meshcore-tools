@@ -24,7 +24,7 @@ from textual.widgets import DataTable, Static
 
 from meshcore_tools.db import is_blacklisted, resolve_name
 from meshcore_tools.decoder import GROUP_TYPES, decode_packet
-from meshcore_tools.disambiguation import resolve_path_hops
+from meshcore_tools.disambiguation import _candidates_for, resolve_path_hops
 
 if TYPE_CHECKING:
     from meshcore_tools.disambiguation import ResolvedHop
@@ -152,6 +152,47 @@ def _guard_relay_range(
     return None
 
 
+def _geo_resolve_hash(
+    node_hash: str,
+    db: dict,
+    anchors: list[tuple[float, float]],
+    remote_coords: dict[str, dict] | None,
+    max_dist_km: float,
+) -> tuple[str, tuple[float, float]] | None:
+    """Try to disambiguate a short node hash using geographic filtering.
+
+    Looks up all DB candidates for node_hash, then keeps only those whose
+    known coordinates are within max_dist_km of at least one anchor position.
+    Returns (full_key, (lat, lon)) when exactly one plausible candidate
+    remains, otherwise None.
+
+    This is the Tier-2 geo-scoring equivalent for source/dest hashes.
+    """
+    if not anchors:
+        return None
+    candidates = _candidates_for(node_hash, db)
+    if len(candidates) < 2:
+        return None  # already handled by add_node (unique or unknown)
+
+    plausible: list[tuple[str, tuple[float, float]]] = []
+    for key, entry in candidates:
+        lat = entry.get("lat")
+        lon = entry.get("lon")
+        if (lat is None or lon is None) and remote_coords:
+            rc = remote_coords.get(key)
+            if rc:
+                lat, lon = rc.get("lat"), rc.get("lon")
+        if lat is None or lon is None:
+            continue
+        flat, flon = float(lat), float(lon)
+        if flat == 0.0 and flon == 0.0:
+            continue
+        if any(_haversine_km(flat, flon, a[0], a[1]) <= max_dist_km for a in anchors):
+            plausible.append((key, (flat, flon)))
+
+    return plausible[0] if len(plausible) == 1 else None
+
+
 def _lookup_coords(
     node_id: str,
     db: dict,
@@ -272,6 +313,7 @@ def collect_map_nodes(
             _place(label, "relay", coords)
 
     # --- Source ---
+    src_hash = ""
     if ptype == "Advert":
         pub = payload_dec.get("public_key", "")
         if pub:
@@ -398,9 +440,32 @@ def collect_map_nodes(
             add_relay(label, _guard_relay_range(relay_coords, _anchors, label))
 
     # --- Dest ---
-    dest_hash = payload_dec.get("dest_hash", "")
+    # Path packets use "dst_hash"; all other types use "dest_hash".
+    dest_hash = payload_dec.get("dest_hash", "") or payload_dec.get("dst_hash", "")
     if dest_hash:
         add_node(dest_hash, "dest")
+
+    # --- Geo-scoring retry for ambiguous source / dest ---
+    # After relays and observer are placed we have geographic anchors.  If
+    # source or dest couldn't be placed because their short hash (1–2 bytes)
+    # matched multiple DB candidates, try to narrow down using proximity:
+    # a node is plausible only if its known coords are within LoRa range of
+    # at least one already-placed node.
+    _geo_anchors: list[tuple[float, float]] = [(lat, lon) for _, _, lat, lon in placed]
+    if _geo_anchors:
+        if src_hash and not any(r == "source" for _, r, _, _ in placed):
+            resolved = _geo_resolve_hash(src_hash, db, _geo_anchors, remote_coords, max_relay_dist_km)
+            if resolved:
+                src_key, src_geo_coords = resolved
+                _place(resolve_name(src_key, db), "source", src_geo_coords)
+                logger.debug("map: source %r placed via geo-scoring at %s", src_key, src_geo_coords)
+
+        if dest_hash and not any(r == "dest" for _, r, _, _ in placed):
+            resolved = _geo_resolve_hash(dest_hash, db, _geo_anchors, remote_coords, max_relay_dist_km)
+            if resolved:
+                dst_key, dst_geo_coords = resolved
+                _place(resolve_name(dst_key, db), "dest", dst_geo_coords)
+                logger.debug("map: dest %r placed via geo-scoring at %s", dst_key, dst_geo_coords)
 
     # --- Build path segments: source → relays (with gap flags) → observer ---
     src_coords = next(((lat, lon) for _, r, lat, lon in placed if r == "source"), None)
@@ -648,8 +713,12 @@ def _build_footer(placed: list[tuple[str, str, float, float]], unplaced: list[st
         legend += f"  [dim]({role_summary})[/dim]"
     lines = [legend]
     if unplaced:
-        lines.append(f"[dim]No coords: {len(unplaced)} node(s)[/dim]")
-        logger.debug("map: unplaced nodes (no coords): %s", ", ".join(unplaced))
+        _MAX_NAMES = 5
+        if len(unplaced) <= _MAX_NAMES:
+            names_str = ", ".join(unplaced)
+        else:
+            names_str = ", ".join(unplaced[:_MAX_NAMES]) + f" +{len(unplaced) - _MAX_NAMES} more"
+        lines.append(f"[dim]No coords: {names_str}[/dim]")
     return "\n".join(lines)
 
 
