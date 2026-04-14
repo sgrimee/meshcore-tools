@@ -128,7 +128,9 @@ def _lookup_coords(
             lat = entry.get("lat")
             lon = entry.get("lon")
             if lat is not None and lon is not None:
-                return (float(lat), float(lon))
+                flat, flon = float(lat), float(lon)
+                if flat != 0.0 or flon != 0.0:  # (0,0) = Null Island — treat as unknown
+                    return (flat, flon)
     if remote_coords:
         for key, coord in remote_coords.items():
             key_l = key.lower()
@@ -136,7 +138,9 @@ def _lookup_coords(
                 lat = coord.get("lat")
                 lon = coord.get("lon")
                 if lat is not None and lon is not None:
-                    return (float(lat), float(lon))
+                    flat, flon = float(lat), float(lon)
+                    if flat != 0.0 or flon != 0.0:
+                        return (flat, flon)
     return None
 
 
@@ -594,7 +598,8 @@ def _build_footer(placed: list[tuple[str, str, float, float]], unplaced: list[st
         legend += f"  [dim]({role_summary})[/dim]"
     lines = [legend]
     if unplaced:
-        lines.append("[dim]No coords:[/dim] " + ", ".join(unplaced))
+        lines.append(f"[dim]No coords: {len(unplaced)} node(s)[/dim]")
+        logger.debug("map: unplaced nodes (no coords): %s", ", ".join(unplaced))
     return "\n".join(lines)
 
 
