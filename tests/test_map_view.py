@@ -35,6 +35,21 @@ def test_lookup_coords_missing_lon():
     assert _lookup_coords("aabbccdd", db) is None
 
 
+def test_lookup_coords_remote_fallback():
+    """Falls back to remote_coords when db has no match."""
+    db = {"nodes": {}}
+    remote = {"aabbccdd" * 4: {"lat": 49.5, "lon": 6.2}}
+    assert _lookup_coords("aabbccdd" * 4, db, remote_coords=remote) == (49.5, 6.2)
+
+
+def test_lookup_coords_db_wins_over_remote():
+    """DB takes priority over remote_coords for the same key."""
+    key = "aabbccdd" * 4
+    db = {"nodes": {key: {"lat": 1.0, "lon": 2.0}}}
+    remote = {key: {"lat": 99.0, "lon": 99.0}}
+    assert _lookup_coords(key, db, remote_coords=remote) == (1.0, 2.0)
+
+
 # ---------------------------------------------------------------------------
 # collect_map_nodes helpers
 # ---------------------------------------------------------------------------
@@ -75,7 +90,7 @@ def test_collect_map_nodes_advert_label_from_db():
     packet = {"raw_data": raw_hex}
     db = {"nodes": {pub.hex(): {"name": "my-gateway"}}}
     placed, _, _ = collect_map_nodes(packet, db)
-    assert placed[0][0] == "my-gateway"
+    assert "my-gateway" in placed[0][0]
 
 
 # ---------------------------------------------------------------------------
@@ -98,8 +113,9 @@ def test_collect_map_nodes_observer_from_db():
     packet = _flood_textmsg_packet(src_hash="deadbeef", origin_id="aabbccdd", path=[])
     placed, unplaced, _ = collect_map_nodes(packet, db)
     roles = {label: role for label, role, _, _ in placed}
-    assert "obs-node" in roles
-    assert roles["obs-node"] == "observer"
+    obs_entry = next((label for label in roles if "obs-node" in label), None)
+    assert obs_entry is not None
+    assert roles[obs_entry] == "observer"
 
 
 def test_collect_map_nodes_unplaced_when_no_coords():
@@ -110,8 +126,8 @@ def test_collect_map_nodes_unplaced_when_no_coords():
     assert len(unplaced) >= 1
 
 
-def test_collect_map_nodes_path_coords_order():
-    """path_coords should be source → relays → observer."""
+def test_collect_map_nodes_path_segments_order():
+    """path_segments should be source→relay and relay→observer, both solid."""
     src_key = "aa" * 4
     relay_key = "bb" * 4
     obs_key = "cc" * 4
@@ -130,10 +146,16 @@ def test_collect_map_nodes_path_coords_order():
         "_path": [relay_key],
         "origin_id": obs_key,
     }
-    placed, _, path_coords = collect_map_nodes(packet, db)
-    assert path_coords[0] == (1.0, 1.0)   # source first
-    assert path_coords[1] == (2.0, 2.0)   # relay in middle
-    assert path_coords[2] == (3.0, 3.0)   # observer last
+    placed, _, path_segments = collect_map_nodes(packet, db)
+    assert len(path_segments) == 2
+    start0, end0, solid0 = path_segments[0]
+    start1, end1, solid1 = path_segments[1]
+    assert start0 == (1.0, 1.0)   # source
+    assert end0 == (2.0, 2.0)     # relay
+    assert start1 == (2.0, 2.0)   # relay
+    assert end1 == (3.0, 3.0)     # observer
+    assert solid0 is True
+    assert solid1 is True
 
 
 def test_collect_map_nodes_dedup_same_coords():
@@ -190,12 +212,338 @@ def test_collect_map_nodes_uses_resolved_hops():
     placed, unplaced, _ = collect_map_nodes(packet, db, resolved_hops=[hop])
 
     labels = [label for label, _, _, _ in placed]
-    assert "ResolvedRelay" in labels
+    assert any("ResolvedRelay" in lbl for lbl in labels)
     # DB name for relay must NOT appear (resolved name took precedence)
-    assert "db-relay-name" not in labels
+    assert not any("db-relay-name" in lbl for lbl in labels)
 
     # Verify the resolved coords were used
-    relay_entry = next((e for e in placed if e[0] == "ResolvedRelay"), None)
+    relay_entry = next((e for e in placed if "ResolvedRelay" in e[0]), None)
     assert relay_entry is not None
     assert abs(relay_entry[2] - 49.5) < 0.001
     assert abs(relay_entry[3] - 6.5) < 0.001
+
+
+# ---------------------------------------------------------------------------
+# Path segment gap detection
+# ---------------------------------------------------------------------------
+
+def test_path_segments_solid_when_all_relays_placed():
+    """All relays with coords → all segments solid."""
+    src_key = "aa" * 4
+    r1_key = "bb" * 4
+    r2_key = "cc" * 4
+    obs_key = "dd" * 4
+    db = {
+        "nodes": {
+            src_key: {"lat": 1.0, "lon": 1.0, "name": "src"},
+            r1_key: {"lat": 2.0, "lon": 2.0, "name": "r1"},
+            r2_key: {"lat": 3.0, "lon": 3.0, "name": "r2"},
+            obs_key: {"lat": 4.0, "lon": 4.0, "name": "obs"},
+        }
+    }
+    packet = {
+        "raw_data": "",
+        "_route_type": "Flood",
+        "_src_hash": src_key,
+        "_path": [src_key, r1_key, r2_key],
+        "origin_id": obs_key,
+    }
+    _, _, path_segments = collect_map_nodes(packet, db)
+    assert all(solid for _, _, solid in path_segments)
+
+
+def test_path_segments_dashed_for_unplaced_relay():
+    """An unplaced relay between two placed nodes produces a dashed segment."""
+    src_key = "aa" * 4
+    relay_hash = "bb"  # short hash, not in DB
+    obs_key = "cc" * 4
+    db = {
+        "nodes": {
+            src_key: {"lat": 1.0, "lon": 1.0, "name": "src"},
+            obs_key: {"lat": 3.0, "lon": 3.0, "name": "obs"},
+            # relay_hash deliberately absent → unplaced
+        }
+    }
+    hop = ResolvedHop(
+        raw_hash=relay_hash,
+        resolved_key=None,
+        name="UnknownRelay",
+        lat=None,
+        lon=None,
+        confidence="unknown",
+    )
+    packet = {
+        "raw_data": "",
+        "_route_type": "Flood",
+        "_src_hash": src_key,
+        "_path": [src_key, relay_hash],
+        "origin_id": obs_key,
+    }
+    placed, unplaced, path_segments = collect_map_nodes(
+        packet, db, resolved_hops=[hop]
+    )
+    # One dashed segment spans the gap: src → obs (relay was unplaced)
+    assert any(not solid for _, _, solid in path_segments), \
+        "Expected at least one dashed segment"
+    # The dashed segment must connect source to observer
+    dashed = [(s, e) for s, e, solid in path_segments if not solid]
+    assert len(dashed) == 1
+    assert dashed[0][0] == (1.0, 1.0)  # source
+    assert dashed[0][1] == (3.0, 3.0)  # observer
+
+
+def test_path_segments_consecutive_unplaced_produce_single_dashed():
+    """Two consecutive unplaced relays produce one dashed segment, not two."""
+    src_key = "aa" * 4
+    obs_key = "dd" * 4
+    db = {
+        "nodes": {
+            src_key: {"lat": 1.0, "lon": 1.0, "name": "src"},
+            obs_key: {"lat": 4.0, "lon": 4.0, "name": "obs"},
+        }
+    }
+    hops = [
+        ResolvedHop("bb", None, "X", None, None, "unknown"),
+        ResolvedHop("cc", None, "Y", None, None, "unknown"),
+    ]
+    packet = {
+        "raw_data": "",
+        "_route_type": "Flood",
+        "_src_hash": src_key,
+        "_path": [src_key, "bb", "cc"],
+        "origin_id": obs_key,
+    }
+    _, _, path_segments = collect_map_nodes(packet, db, resolved_hops=hops)
+    dashed = [(s, e) for s, e, solid in path_segments if not solid]
+    assert len(dashed) == 1, "Two consecutive gaps should collapse into one dashed segment"
+
+
+def test_path_segments_blacklisted_relay_no_gap():
+    """A blacklisted relay between two placed nodes does NOT create a gap."""
+    src_key = "aa" * 4
+    obs_key = "cc" * 4
+    bl_key = "bb" * 4
+    db = {
+        "nodes": {
+            src_key: {"lat": 1.0, "lon": 1.0, "name": "src"},
+            obs_key: {"lat": 3.0, "lon": 3.0, "name": "obs"},
+            bl_key: {"lat": 2.0, "lon": 2.0, "name": "bad-relay"},
+        }
+    }
+    packet = {
+        "raw_data": "",
+        "_route_type": "Flood",
+        "_src_hash": src_key,
+        "_path": [src_key, bl_key],
+        "origin_id": obs_key,
+    }
+    _, _, path_segments = collect_map_nodes(
+        packet, db, blacklist=["bad-relay"]
+    )
+    # All remaining segments should be solid (blacklisted relay is removed, not a gap)
+    assert all(solid for _, _, solid in path_segments), \
+        "Blacklisted relay should not produce a dashed segment"
+
+
+def test_collect_map_nodes_remote_coords_resolves_unplaced():
+    """A unique relay with no DB coords gets placed when remote_coords has its key."""
+    src_key = "aa" * 4
+    relay_key = "bb" * 32  # 64-char key
+    obs_key = "cc" * 4
+    db = {
+        "nodes": {
+            src_key: {"lat": 1.0, "lon": 1.0, "name": "src"},
+            relay_key: {"name": "relay-no-gps"},  # in DB but no lat/lon
+            obs_key: {"lat": 3.0, "lon": 3.0, "name": "obs"},
+        }
+    }
+    remote = {relay_key: {"lat": 2.0, "lon": 2.0}}
+    hop = ResolvedHop(
+        raw_hash=relay_key[:4],
+        resolved_key=relay_key,
+        name="relay-no-gps",
+        lat=None,
+        lon=None,
+        confidence="unique",
+    )
+    packet = {
+        "raw_data": "",
+        "_route_type": "Flood",
+        "_src_hash": src_key,
+        "_path": [src_key, relay_key[:4]],
+        "origin_id": obs_key,
+    }
+    placed, unplaced, path_segments = collect_map_nodes(
+        packet, db, resolved_hops=[hop], remote_coords=remote
+    )
+    relay_labels = [label for label, role, _, _ in placed if role == "relay"]
+    assert any("relay-no-gps" in lbl for lbl in relay_labels), "Remote coords should have placed the relay"
+    assert not any("relay-no-gps" in lbl for lbl in unplaced)
+    # All segments should now be solid
+    assert all(solid for _, _, solid in path_segments)
+
+
+def test_unknown_relay_not_placed_via_remote_coords():
+    """confidence='unknown' relay must NOT be placed using remote_coords.
+
+    A short hop hash like '66' can prefix-match any worldwide node in remote_coords.
+    Placing it would put the relay on the wrong continent. The relay must stay unplaced.
+    """
+    src_key = "aa" * 4
+    obs_key = "cc" * 4
+    relay_hash = "66"  # 1-byte hash, unknown (no local DB match)
+    far_away_key = "66" + "bb" * 31  # 64-char key starting with "66", far-away node
+
+    db = {
+        "nodes": {
+            src_key: {"lat": 49.0, "lon": 6.0, "name": "src"},
+            obs_key: {"lat": 49.5, "lon": 6.5, "name": "obs"},
+            # relay_hash deliberately absent
+        }
+    }
+    remote = {far_away_key: {"lat": -34.0, "lon": -70.0}}  # South America
+
+    hop = ResolvedHop(
+        raw_hash=relay_hash,
+        resolved_key=None,
+        name=relay_hash[:8],
+        lat=None,
+        lon=None,
+        confidence="unknown",
+    )
+    packet = {
+        "raw_data": "",
+        "_route_type": "Flood",
+        "_src_hash": src_key,
+        "_path": [src_key, relay_hash],
+        "origin_id": obs_key,
+    }
+    placed, unplaced, _ = collect_map_nodes(
+        packet, db, resolved_hops=[hop], remote_coords=remote
+    )
+    relay_lats = [lat for _, role, lat, _ in placed if role == "relay"]
+    assert not relay_lats, "Unknown relay must not be placed via remote_coords"
+    assert any(relay_hash[:8] in lbl for lbl in unplaced), "Unknown relay must be in unplaced"
+
+
+def test_unique_local_relay_no_local_coords_placed_via_remote():
+    """A relay with exactly one local DB entry (but no local coords) is placed via remote_coords.
+
+    When n_candidates==1 we know the full DB key, so we can safely look up
+    remote_coords — no short-hash ambiguity.  This covers both the rh-is-None
+    fallback and the no-resolved-hops else branch.
+    """
+    src_key = "aa" * 4
+    obs_key = "cc" * 4
+    relay_key = "bb" * 32  # 64-char key, in local DB but no coords there
+    relay_hash = relay_key[:4]  # short hash used in the packet path
+
+    db = {
+        "nodes": {
+            src_key: {"lat": 49.0, "lon": 6.0, "name": "src"},
+            obs_key: {"lat": 49.5, "lon": 6.5, "name": "obs"},
+            relay_key: {"name": "relay-no-gps"},  # in DB, no lat/lon
+        }
+    }
+    remote = {relay_key: {"lat": 49.2, "lon": 6.1}}  # nearby, plausible
+
+    packet = {
+        "raw_data": "",
+        "_route_type": "Flood",
+        "_src_hash": src_key,
+        "_path": [src_key, relay_hash],
+        "origin_id": obs_key,
+    }
+
+    # rh-is-None fallback (resolved_hops=[] so relay falls through)
+    placed, unplaced, _ = collect_map_nodes(
+        packet, db, resolved_hops=[], remote_coords=remote
+    )
+    relay_entries = [(lat, lon) for _, role, lat, lon in placed if role == "relay"]
+    assert relay_entries, "Relay with one local match should be placed via remote_coords"
+    assert abs(relay_entries[0][0] - 49.2) < 0.001
+
+    # No-resolved-hops else branch (resolved_hops=None)
+    placed2, unplaced2, _ = collect_map_nodes(
+        packet, db, resolved_hops=None, remote_coords=remote
+    )
+    relay_entries2 = [(lat, lon) for _, role, lat, lon in placed2 if role == "relay"]
+    assert relay_entries2, "Relay with one local match should be placed via remote_coords (no-resolved-hops path)"
+    assert abs(relay_entries2[0][0] - 49.2) < 0.001
+
+
+def test_partial_key_relay_not_placed_via_remote_coords():
+    """A relay resolved to a PARTIAL DB key must not use remote_coords.
+
+    Partial keys (< 64 hex chars) prefix-match any worldwide node that starts
+    with the same prefix — exactly the wrong-continent placement bug.
+    Only full 64-char keys are safe to use against remote_coords.
+    """
+    src_key = "aa" * 4
+    obs_key = "cc" * 4
+    relay_partial = "3e"          # partial key in local DB (user-configured)
+    relay_hash = "3e"             # hop hash matches
+    far_away_key = "3e" + "bb" * 31  # full remote key starting with "3e" — North America
+
+    db = {
+        "nodes": {
+            src_key: {"lat": 49.0, "lon": 6.0, "name": "src"},
+            obs_key: {"lat": 49.5, "lon": 6.5, "name": "obs"},
+            relay_partial: {"name": "Meshnet.lu RPT 8", "key_complete": False},
+        }
+    }
+    remote = {far_away_key: {"lat": 45.0, "lon": -75.0}}  # Ottawa, Canada
+
+    hop = ResolvedHop(
+        raw_hash=relay_hash,
+        resolved_key=relay_partial,   # partial key — NOT safe for remote lookup
+        name="Meshnet.lu RPT 8",
+        lat=None,
+        lon=None,
+        confidence="unique",
+    )
+    packet = {
+        "raw_data": "",
+        "_route_type": "Flood",
+        "_src_hash": src_key,
+        "_path": [src_key, relay_hash],
+        "origin_id": obs_key,
+    }
+    placed, unplaced, _ = collect_map_nodes(
+        packet, db, resolved_hops=[hop], remote_coords=remote
+    )
+    relay_lats = [lat for _, role, lat, _ in placed if role == "relay"]
+    assert not relay_lats, (
+        "Relay with partial DB key must not be placed via remote_coords "
+        f"(got lats: {relay_lats})"
+    )
+
+
+def test_no_local_match_relay_not_placed_via_remote_coords():
+    """A relay not in resolved_hops (rh is None) with n_candidates==0 must not use remote_coords."""
+    src_key = "aa" * 4
+    obs_key = "cc" * 4
+    relay_hash = "66"
+    far_away_key = "66" + "bb" * 31
+
+    db = {
+        "nodes": {
+            src_key: {"lat": 49.0, "lon": 6.0, "name": "src"},
+            obs_key: {"lat": 49.5, "lon": 6.5, "name": "obs"},
+        }
+    }
+    remote = {far_away_key: {"lat": -34.0, "lon": -70.0}}  # South America
+
+    # Pass resolved_hops=[] so relay_hash falls into the rh-is-None fallback
+    packet = {
+        "raw_data": "",
+        "_route_type": "Flood",
+        "_src_hash": src_key,
+        "_path": [src_key, relay_hash],
+        "origin_id": obs_key,
+    }
+    placed, unplaced, _ = collect_map_nodes(
+        packet, db, resolved_hops=[], remote_coords=remote
+    )
+    relay_lats = [lat for _, role, lat, _ in placed if role == "relay"]
+    assert not relay_lats, "Relay with no local DB match must not be placed via remote_coords"

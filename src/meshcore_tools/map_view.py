@@ -7,6 +7,8 @@ Requires optional dependencies:
 from __future__ import annotations
 
 import hashlib
+import math
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -52,9 +54,74 @@ _ROLE_COLORS = {
     "dest": ("#ff4444", "red"),
 }
 
+# ---------------------------------------------------------------------------
+# Remote coordinate cache (fetched once per session from map.meshcore.dev)
+# ---------------------------------------------------------------------------
 
-def _lookup_coords(node_id: str, db: dict) -> tuple[float, float] | None:
-    """Return (lat, lon) for the first db entry matching node_id as a key prefix."""
+_remote_coords: dict[str, dict] = {}
+_remote_coords_fetched: bool = False
+_remote_coords_lock: threading.Lock = threading.Lock()
+
+
+def _ensure_remote_coords() -> dict[str, dict]:
+    """Fetch GPS coordinates from map.meshcore.dev once per session.
+
+    Safe to call from multiple threads. Returns cached result on subsequent calls.
+    """
+    global _remote_coords, _remote_coords_fetched
+    with _remote_coords_lock:
+        if not _remote_coords_fetched:
+            try:
+                from meshcore_tools.providers.meshcore_rest import MeshcoreRestProvider
+                _remote_coords = MeshcoreRestProvider().fetch_node_coords()
+                logger.debug("Fetched remote coords for %d nodes", len(_remote_coords))
+            except Exception as e:
+                logger.warning("Failed to fetch remote node coords: %s", e)
+            _remote_coords_fetched = True
+    return _remote_coords
+
+
+# PathSegment: (start_latlon, end_latlon, is_solid)
+# is_solid=True  → solid line (consecutive placed nodes, no gap between them)
+# is_solid=False → dashed line (one or more unplaced nodes between the endpoints)
+PathSegment = tuple[tuple[float, float], tuple[float, float], bool]
+
+
+def _route_order_to_segments(
+    route_order: list[tuple[float, float] | None],
+) -> list[PathSegment]:
+    """Convert an ordered list of placed-coords or None to path segments.
+
+    Consecutive None entries (unresolved hops) collapse into a single dashed
+    segment between the surrounding placed nodes.
+    """
+    segments: list[PathSegment] = []
+    prev: tuple[float, float] | None = None
+    has_gap = False
+    for coord in route_order:
+        if coord is None:
+            has_gap = True
+        else:
+            if prev is not None:
+                segments.append((prev, coord, not has_gap))
+            prev = coord
+            has_gap = False
+    return segments
+
+
+# ---------------------------------------------------------------------------
+# Coordinate helpers
+# ---------------------------------------------------------------------------
+
+def _lookup_coords(
+    node_id: str,
+    db: dict,
+    remote_coords: dict[str, dict] | None = None,
+) -> tuple[float, float] | None:
+    """Return (lat, lon) for the first db entry matching node_id as a key prefix.
+
+    Falls back to remote_coords (from map.meshcore.dev) when the db has no match.
+    """
     node_id = node_id.lower()
     for key, entry in db.get("nodes", {}).items():
         if key.startswith(node_id) or node_id.startswith(key[: len(node_id)]):
@@ -62,22 +129,36 @@ def _lookup_coords(node_id: str, db: dict) -> tuple[float, float] | None:
             lon = entry.get("lon")
             if lat is not None and lon is not None:
                 return (float(lat), float(lon))
+    if remote_coords:
+        for key, coord in remote_coords.items():
+            key_l = key.lower()
+            if key_l.startswith(node_id) or node_id.startswith(key_l[: len(node_id)]):
+                lat = coord.get("lat")
+                lon = coord.get("lon")
+                if lat is not None and lon is not None:
+                    return (float(lat), float(lon))
     return None
 
+
+# ---------------------------------------------------------------------------
+# Node collection
+# ---------------------------------------------------------------------------
 
 def collect_map_nodes(
     packet: dict,
     db: dict,
     blacklist: list[str] | None = None,
     resolved_hops: list["ResolvedHop"] | None = None,
-) -> tuple[list[tuple[str, str, float, float]], list[str], list[tuple[float, float]]]:
+    remote_coords: dict[str, dict] | None = None,
+) -> tuple[list[tuple[str, str, float, float]], list[str], list[PathSegment]]:
     """Collect nodes involved in a packet with their coordinates.
 
     Returns:
-        placed:      list of (label, role, lat, lon)
-        unplaced:    list of labels for nodes without known coordinates
-        path_coords: (lat, lon) pairs in routing order (source→relays→observer)
-                     for drawing the path line
+        placed:        list of (label, role, lat, lon)
+        unplaced:      list of labels for nodes without known coordinates
+        path_segments: (start, end, is_solid) tuples in routing order
+                       (source → relays → observer); is_solid=False indicates
+                       one or more unplaced hops between the two endpoints.
     """
     bl = blacklist or []
     dec = packet.get("_decoded") or decode_packet(packet.get("raw_data", "") or "")
@@ -90,20 +171,11 @@ def collect_map_nodes(
 
     placed: list[tuple[str, str, float, float]] = []
     unplaced: list[str] = []
+    # Routing-order coords for relay hops (None = unplaced, produces a dashed segment)
+    relay_route: list[tuple[float, float] | None] = []
 
-    def add_node(
-        node_id: str, role: str, coords: tuple[float, float] | None = None
-    ) -> None:
-        if is_blacklisted(node_id, db, bl):
-            logger.debug("blacklist: skipping node %s (%s) in map", node_id, resolve_name(node_id, db))
-            return
-        label = resolve_name(node_id, db)
-        if coords is None:
-            coords = _lookup_coords(node_id, db)
-        if coords is None:
-            if label not in unplaced:
-                unplaced.append(label)
-            return
+    def _place(label: str, role: str, coords: tuple[float, float]) -> None:
+        """Insert (label, role, lat, lon) into placed, respecting role priority dedup."""
         lat, lon = coords
         for i, (_, r, elat, elon) in enumerate(placed):
             if elat == lat and elon == lon:
@@ -112,12 +184,51 @@ def collect_map_nodes(
                 return
         placed.append((label, role, lat, lon))
 
+    def add_node(
+        node_id: str, role: str, coords: tuple[float, float] | None = None
+    ) -> None:
+        """Resolve and place a non-relay node (source / observer / dest)."""
+        if is_blacklisted(node_id, db, bl):
+            logger.debug(
+                "blacklist: skipping node %s (%s) in map",
+                node_id,
+                resolve_name(node_id, db),
+            )
+            return
+        label = resolve_name(node_id, db)
+        if coords is None:
+            # Guard: only look up coords when the hash prefix is unambiguous.
+            # A short hash matching multiple DB nodes would place the node at
+            # the wrong location; better to leave it unplaced.
+            node_id_l = node_id.lower()
+            n_candidates = sum(
+                1 for key in db.get("nodes", {})
+                if key.startswith(node_id_l) or node_id_l.startswith(key[: len(node_id_l)])
+            )
+            if n_candidates <= 1:
+                coords = _lookup_coords(node_id, db, remote_coords)
+        if coords is None:
+            if label not in unplaced:
+                unplaced.append(label)
+            return
+        _place(label, role, coords)
+
+    def add_relay(label: str, coords: tuple[float, float] | None) -> None:
+        """Place a relay hop and record its position in relay_route for gap tracking."""
+        relay_route.append(coords)
+        if coords is None:
+            if label not in unplaced:
+                unplaced.append(label)
+        else:
+            _place(label, "relay", coords)
+
+    # --- Source ---
     if ptype == "Advert":
         pub = payload_dec.get("public_key", "")
         if pub:
             raw_lat = payload_dec.get("lat")
             raw_lon = payload_dec.get("lon")
-            coords = (
+            coords: tuple[float, float] | None = (
                 (float(raw_lat), float(raw_lon))
                 if raw_lat is not None and raw_lon is not None
                 else None
@@ -131,24 +242,52 @@ def collect_map_nodes(
         if src_hash:
             add_node(src_hash, "source")
 
+    # --- Observer ---
     origin_id = packet.get("origin_id", "")
     if origin_id:
         add_node(origin_id, "observer")
 
-    # For group types, all path entries are forwarders (source is encrypted)
+    # --- Relays ---
     if is_group and not is_direct:
         relays = full_path
     else:
         relays = full_path if is_direct else full_path[1:]
 
     if resolved_hops is not None:
-        # Build a lookup map from raw_hash → ResolvedHop (for the relay subset only)
         resolved_map = {rh.raw_hash.lower(): rh for rh in resolved_hops}
         for relay_id in relays:
             rh = resolved_map.get(relay_id.lower())
             if rh is None:
-                add_node(relay_id, "relay")
+                # Hash not in resolved set — fall back to a guarded DB lookup.
+                # This path should be rare; it fires when a relay hash wasn't
+                # included in the resolve_path_hops() call.
+                if is_blacklisted(relay_id, db, bl):
+                    logger.debug(
+                        "blacklist: skipping relay hop %s in map", relay_id
+                    )
+                    continue  # blacklisted → not a gap in the path
+                label = resolve_name(relay_id, db)
+                # Only place if the short hash matches exactly one DB node —
+                # a prefix shared by multiple nodes gives wrong coordinates.
+                relay_id_l = relay_id.lower()
+                n_candidates = sum(
+                    1 for key in db.get("nodes", {})
+                    if key.startswith(relay_id_l) or relay_id_l.startswith(key[: len(relay_id_l)])
+                )
+                if n_candidates == 1:
+                    full_relay_key = next(
+                        key for key in db.get("nodes", {})
+                        if key.startswith(relay_id_l) or relay_id_l.startswith(key[: len(relay_id_l)])
+                    )
+                    # Only use remote_coords when the DB key is full (64 hex chars).
+                    # Partial keys prefix-match worldwide nodes → wrong continent.
+                    rc = remote_coords if len(full_relay_key) == 64 else None
+                    relay_coords = _lookup_coords(full_relay_key, db, rc)
+                else:
+                    relay_coords = None
+                add_relay(label, relay_coords)
                 continue
+
             check_key = rh.resolved_key if rh.resolved_key is not None else relay_id
             if is_blacklisted(check_key, db, bl):
                 logger.debug(
@@ -156,47 +295,77 @@ def collect_map_nodes(
                     check_key,
                     rh.name,
                 )
-                continue
+                continue  # blacklisted → not a gap in the path
+
             label = rh.name
-            # Use resolved coords when available, fall back to DB lookup for
-            # ambiguous/unknown hops (preserves old placement behaviour)
-            if rh.lat is not None and rh.lon is not None:
-                coords: tuple[float, float] | None = (rh.lat, rh.lon)
+            # Only place relays we can identify with confidence.
+            # "unknown" has no full key — a short-hash remote lookup would match
+            # worldwide nodes and place the relay on the wrong continent.
+            # "ambiguous" coords are unreliable (Tier 2 best-guess only).
+            if rh.confidence in ("ambiguous", "unknown"):
+                relay_coords = None
+            elif rh.lat is not None and rh.lon is not None:
+                # unique or geo_selected with known coords
+                relay_coords = (rh.lat, rh.lon)
             else:
-                coords = _lookup_coords(relay_id, db)
-            if coords is None:
-                if label not in unplaced:
-                    unplaced.append(label)
-            else:
-                lat, lon = coords
-                for i, (_, r, elat, elon) in enumerate(placed):
-                    if elat == lat and elon == lon:
-                        if _ROLE_PRIORITY["relay"] < _ROLE_PRIORITY[r]:
-                            placed[i] = (label, "relay", lat, lon)
-                        break
+                # Only use remote_coords when we have the full 64-char key.
+                # A partial key (<64 chars) prefix-matches many worldwide nodes
+                # and would place the relay on the wrong continent.
+                key = rh.resolved_key
+                if key and len(key) == 64:
+                    relay_coords = _lookup_coords(key, db, remote_coords)
+                elif key:
+                    relay_coords = _lookup_coords(key, db)
                 else:
-                    placed.append((label, "relay", lat, lon))
+                    relay_coords = None
+            add_relay(label, relay_coords)
     else:
         for hop in relays:
-            add_node(hop, "relay")
+            if is_blacklisted(hop, db, bl):
+                logger.debug("blacklist: skipping relay hop %s in map", hop)
+                continue  # blacklisted → not a gap in the path
+            label = resolve_name(hop, db)
+            # Same guard as the rh is None branch above: only place when
+            # the hash is unambiguous (single DB match).
+            hop_l = hop.lower()
+            n_candidates = sum(
+                1 for key in db.get("nodes", {})
+                if key.startswith(hop_l) or hop_l.startswith(key[: len(hop_l)])
+            )
+            if n_candidates == 1:
+                full_hop_key = next(
+                    key for key in db.get("nodes", {})
+                    if key.startswith(hop_l) or hop_l.startswith(key[: len(hop_l)])
+                )
+                rc = remote_coords if len(full_hop_key) == 64 else None
+                relay_coords = _lookup_coords(full_hop_key, db, rc)
+            else:
+                relay_coords = None
+            add_relay(label, relay_coords)
 
+    # --- Dest ---
     dest_hash = payload_dec.get("dest_hash", "")
     if dest_hash:
         add_node(dest_hash, "dest")
 
-    # Build routing-order path for line drawing: source → relays → observer
-    src = next(((lat, lon) for _, r, lat, lon in placed if r == "source"), None)
-    relay_coords = [(lat, lon) for _, r, lat, lon in placed if r == "relay"]
-    obs = next(((lat, lon) for _, r, lat, lon in placed if r == "observer"), None)
-    path_coords: list[tuple[float, float]] = []
-    if src:
-        path_coords.append(src)
-    path_coords.extend(relay_coords)
-    if obs and obs not in path_coords:
-        path_coords.append(obs)
+    # --- Build path segments: source → relays (with gap flags) → observer ---
+    src_coords = next(((lat, lon) for _, r, lat, lon in placed if r == "source"), None)
+    obs_coords = next(((lat, lon) for _, r, lat, lon in placed if r == "observer"), None)
 
-    return placed, unplaced, path_coords
+    route_order: list[tuple[float, float] | None] = [src_coords]
+    route_order.extend(relay_route)
+    # Only append observer if it adds a new endpoint (prevents zero-length segment)
+    last_placed = next((c for c in reversed(route_order) if c is not None), None)
+    if obs_coords is not None and obs_coords != last_placed:
+        route_order.append(obs_coords)
 
+    path_segments = _route_order_to_segments(route_order)
+    return placed, unplaced, path_segments
+
+
+# ---------------------------------------------------------------------------
+# Tile map rendering
+# ---------------------------------------------------------------------------
 
 if _HAS_MAP_LIBS:
     class _CachedStaticMap(StaticMap):
@@ -297,13 +466,50 @@ def _pick_label_pos(
     return x, y
 
 
+def _draw_dashed_line(
+    draw,
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+    color: str,
+    width: int,
+    dash: int = 20,
+    gap: int = 12,
+) -> None:
+    """Draw a dashed line from (x1,y1) to (x2,y2) using PIL."""
+    length = math.hypot(x2 - x1, y2 - y1)
+    if length == 0:
+        return
+    ux, uy = (x2 - x1) / length, (y2 - y1) / length
+    pos = 0.0
+    drawing = True
+    while pos < length:
+        end = min(pos + (dash if drawing else gap), length)
+        if drawing:
+            draw.line(
+                [
+                    (x1 + ux * pos, y1 + uy * pos),
+                    (x1 + ux * end, y1 + uy * end),
+                ],
+                fill=color,
+                width=width,
+            )
+        pos = end
+        drawing = not drawing
+
+
 def _render_tile_map(
     placed: list[tuple[str, str, float, float]],
-    path_coords: list[tuple[float, float]],
+    path_segments: list[PathSegment],
     width_px: int = 900,
     height_px: int = 500,
 ):
-    """Fetch OSM tiles, draw path line, render node markers, and label them."""
+    """Fetch OSM tiles, draw path line, render node markers, and label them.
+
+    Solid segments connect consecutive placed nodes.
+    Dashed segments span gaps where one or more hops had no coordinates.
+    """
     from PIL import ImageDraw, ImageFont
     from staticmap.staticmap import _lat_to_y, _lon_to_x
 
@@ -320,11 +526,12 @@ def _render_tile_map(
     assert _CachedStaticMap is not None  # only reachable when _HAS_MAP_LIBS is True
     m = _CachedStaticMap(width_px, height_px)
 
-    # Path line: dark outline + white core, drawn before markers so markers sit on top
-    if len(path_coords) >= 2:
-        pts = [(lon, lat) for lat, lon in path_coords]  # staticmap uses (lon, lat)
-        m.add_line(Line(pts, "#000000", 8))
-        m.add_line(Line(pts, "#ffffff", 4))
+    # Add solid path segments via staticmap (rendered beneath markers)
+    for (lat1, lon1), (lat2, lon2), is_solid in path_segments:
+        if is_solid:
+            pts = [(lon1, lat1), (lon2, lat2)]
+            m.add_line(Line(pts, "#000000", 8))
+            m.add_line(Line(pts, "#ffffff", 4))
 
     # Markers: larger for visibility
     for _label, role, lat, lon in placed:
@@ -335,25 +542,34 @@ def _render_tile_map(
     image = m.render()
     draw = ImageDraw.Draw(image)
 
-    # Build path line segments in pixel coords (zoom is fixed after render())
+    # Convert all segment endpoints to pixel coords (zoom is fixed after render())
+    def _to_px(lat: float, lon: float) -> tuple[float, float]:
+        return (
+            m._x_to_px(_lon_to_x(lon, m.zoom)),
+            m._y_to_px(_lat_to_y(lat, m.zoom)),
+        )
+
+    # Draw dashed segments via PIL (appears on top of markers — acceptable for gaps)
+    for (lat1, lon1), (lat2, lon2), is_solid in path_segments:
+        if not is_solid:
+            x1, y1 = _to_px(lat1, lon1)
+            x2, y2 = _to_px(lat2, lon2)
+            _draw_dashed_line(draw, x1, y1, x2, y2, "#000000", 8)
+            _draw_dashed_line(draw, x1, y1, x2, y2, "#ffffff", 4)
+
+    # Build pixel-space line segments for label collision avoidance (all segments)
     line_segs: list[tuple[float, float, float, float]] = []
-    if len(path_coords) >= 2:
-        pts_px = [
-            (m._x_to_px(_lon_to_x(lon, m.zoom)), m._y_to_px(_lat_to_y(lat, m.zoom)))
-            for lat, lon in path_coords
-        ]
-        for i in range(len(pts_px) - 1):
-            ax, ay = pts_px[i]
-            bx, by = pts_px[i + 1]
-            line_segs.append((ax, ay, bx, by))
+    for (lat1, lon1), (lat2, lon2), _ in path_segments:
+        x1, y1 = _to_px(lat1, lon1)
+        x2, y2 = _to_px(lat2, lon2)
+        line_segs.append((x1, y1, x2, y2))
 
     placed_label_boxes: list[tuple[int, int, int, int]] = []
-
     for label, role, lat, lon in placed:
-        hex_color, _ = _ROLE_COLORS.get(role, ("#ffffff", "white"))
-        px = m._x_to_px(_lon_to_x(lon, m.zoom))
-        py = m._y_to_px(_lat_to_y(lat, m.zoom))
-        lx, ly = _pick_label_pos(draw, font, px, py, label, placed_label_boxes, line_segs)
+        px_x, px_y = _to_px(lat, lon)
+        lx, ly = _pick_label_pos(
+            draw, font, int(px_x), int(px_y), label, placed_label_boxes, line_segs
+        )
         draw.text((lx, ly), label, fill="#000000", font=font)
 
     return image
@@ -365,6 +581,26 @@ def _legend() -> str:
         for role, (_, rich_color) in _ROLE_COLORS.items()
     )
 
+
+def _build_footer(placed: list[tuple[str, str, float, float]], unplaced: list[str]) -> str:
+    """Build the footer markup string from placed/unplaced node lists."""
+    role_summary = ", ".join(
+        f"{r}:{sum(1 for _, role, _, _ in placed if role == r)}"
+        for r in ("source", "relay", "observer", "dest")
+        if any(role == r for _, role, _, _ in placed)
+    )
+    legend = _legend()
+    if role_summary:
+        legend += f"  [dim]({role_summary})[/dim]"
+    lines = [legend]
+    if unplaced:
+        lines.append("[dim]No coords:[/dim] " + ", ".join(unplaced))
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# MapSidePanel widget
+# ---------------------------------------------------------------------------
 
 class MapSidePanel(Vertical):
     """Map panel widget for embedding as a side panel in the main monitor.
@@ -408,7 +644,13 @@ class MapSidePanel(Vertical):
             self._map_widget.remove()
             self._map_widget = None
 
-    def load_packet(self, packets: list[dict], index: int, db: dict, blacklist: list[str] | None = None) -> None:
+    def load_packet(
+        self,
+        packets: list[dict],
+        index: int,
+        db: dict,
+        blacklist: list[str] | None = None,
+    ) -> None:
         """Render the map for packets[index]."""
         p = packets[index]
         dec = p.get("_decoded") or {}
@@ -423,15 +665,16 @@ class MapSidePanel(Vertical):
             source_hash=src_hash or None,
             observer_id=observer_id or None,
         )
-        placed, unplaced, path_coords = collect_map_nodes(p, db, blacklist, resolved_hops=resolved)
+
+        # Quick initial pass (no remote fetch) to populate the footer immediately
+        placed, unplaced, _ = collect_map_nodes(p, db, blacklist, resolved_hops=resolved)
 
         self.query_one("#map_side_header", Static).update(
             f"[dim]Packet {index + 1}/{len(packets)}[/dim]"
         )
-        footer_lines = [_legend()]
-        if unplaced:
-            footer_lines.append("[dim]No coords:[/dim] " + ", ".join(unplaced))
-        self.query_one("#map_side_footer", Static).update("\n".join(footer_lines))
+        self.query_one("#map_side_footer", Static).update(
+            _build_footer(placed, unplaced)
+        )
 
         if self._map_widget is not None:
             self._map_widget.remove()
@@ -441,13 +684,8 @@ class MapSidePanel(Vertical):
 
         if not _HAS_MAP_LIBS:
             w = Static(
-                "[dim]Map requires: pip install 'meshcore-tools[map]'[/dim]", markup=True
-            )
-            map_body.mount(w)
-            self._map_widget = w
-        elif not placed:
-            w = Static(
-                "[dim]No coordinates available for this packet.[/dim]", markup=True
+                "[dim]Map requires: pip install 'meshcore-tools[map]'[/dim]",
+                markup=True,
             )
             map_body.mount(w)
             self._map_widget = w
@@ -455,36 +693,67 @@ class MapSidePanel(Vertical):
             w = Static("[dim]Fetching map tiles…[/dim]", markup=True)
             map_body.mount(w)
             self._map_widget = w
-            self.call_after_refresh(self._start_fetch, placed, path_coords)
+            self.call_after_refresh(
+                self._start_fetch, p, db, blacklist or [], resolved
+            )
 
     def _start_fetch(
         self,
-        placed: list[tuple[str, str, float, float]],
-        path_coords: list[tuple[float, float]],
+        packet: dict,
+        db: dict,
+        blacklist: list[str],
+        resolved_hops: list["ResolvedHop"],
     ) -> None:
         map_body = self.query_one("#map_side_body", Container)
-        self._fetch_tiles(placed, path_coords, map_body.size.width, map_body.size.height)
+        self._fetch_tiles(
+            packet, db, blacklist, resolved_hops,
+            map_body.size.width, map_body.size.height,
+        )
 
     @work(thread=True, exclusive=True)
     def _fetch_tiles(
         self,
-        placed: list[tuple[str, str, float, float]],
-        path_coords: list[tuple[float, float]],
+        packet: dict,
+        db: dict,
+        blacklist: list[str],
+        resolved_hops: list["ResolvedHop"],
         w_cells: int,
         h_cells: int,
     ) -> None:
+        remote = _ensure_remote_coords()
+        placed, unplaced, path_segments = collect_map_nodes(
+            packet, db, blacklist, resolved_hops=resolved_hops, remote_coords=remote
+        )
+        # Update footer if remote lookup moved nodes from unplaced → placed
+        self.app.call_from_thread(
+            self._update_footer, placed, unplaced
+        )
+        if not placed:
+            self.app.call_from_thread(
+                self._show_error,
+                "[dim]No coordinates available for this packet.[/dim]",
+            )
+            return
         cell = _get_cell_size()
-        cw, ch = cell.width, cell.height
-        width_px = max(w_cells * cw, 400)
-        height_px = max(h_cells * ch, 300)
+        width_px = max(w_cells * cell.width, 400)
+        height_px = max(h_cells * cell.height, 300)
         try:
-            pil_image = _render_tile_map(placed, path_coords, width_px, height_px)
+            pil_image = _render_tile_map(placed, path_segments, width_px, height_px)
             self.app.call_from_thread(self._show_tile_image, pil_image)
         except Exception as e:
             self.app.call_from_thread(
                 self._show_error,
                 f"[red]Map error:[/red] {markup_escape(str(e))}",
             )
+
+    def _update_footer(
+        self,
+        placed: list[tuple[str, str, float, float]],
+        unplaced: list[str],
+    ) -> None:
+        self.query_one("#map_side_footer", Static).update(
+            _build_footer(placed, unplaced)
+        )
 
     def _show_tile_image(self, pil_image) -> None:
         if self._map_widget is not None:
@@ -500,6 +769,10 @@ class MapSidePanel(Vertical):
         self.query_one("#map_side_body", Container).mount(w)
         self._map_widget = w
 
+
+# ---------------------------------------------------------------------------
+# PacketMapScreen modal
+# ---------------------------------------------------------------------------
 
 class PacketMapScreen(ModalScreen):
     """OSM tile map view of nodes involved in a packet, with up/down navigation.
@@ -536,7 +809,13 @@ class PacketMapScreen(ModalScreen):
         Binding("down,j", "next", "Next"),
     ]
 
-    def __init__(self, packets: list[dict], index: int, db: dict, blacklist: list[str] | None = None):
+    def __init__(
+        self,
+        packets: list[dict],
+        index: int,
+        db: dict,
+        blacklist: list[str] | None = None,
+    ):
         super().__init__()
         self._packets = packets
         self._index = index
@@ -569,16 +848,18 @@ class PacketMapScreen(ModalScreen):
             source_hash=src_hash or None,
             observer_id=observer_id or None,
         )
-        placed, unplaced, path_coords = collect_map_nodes(p, self._db, self._blacklist, resolved_hops=resolved)
+
+        # Quick initial pass (no remote fetch) to populate the footer immediately
+        placed, unplaced, _ = collect_map_nodes(
+            p, self._db, self._blacklist, resolved_hops=resolved
+        )
 
         self.query_one("#map_header", Static).update(
             f"[dim]({self._index + 1}/{n}  ↑↓ navigate  q/Esc close)[/dim]"
         )
-
-        footer_lines = [_legend()]
-        if unplaced:
-            footer_lines.append("[dim]No coords:[/dim] " + ", ".join(unplaced))
-        self.query_one("#map_footer", Static).update("\n".join(footer_lines))
+        self.query_one("#map_footer", Static).update(
+            _build_footer(placed, unplaced)
+        )
 
         if self._map_widget is not None:
             self._map_widget.remove()
@@ -594,18 +875,14 @@ class PacketMapScreen(ModalScreen):
             )
             map_body.mount(w)
             self._map_widget = w
-        elif not placed:
-            w = Static(
-                "[dim]No coordinates available for any node in this packet.[/dim]",
-                markup=True,
-            )
-            map_body.mount(w)
-            self._map_widget = w
         else:
             w = Static("[dim]Fetching map tiles…[/dim]", markup=True)
             map_body.mount(w)
             self._map_widget = w
-            self._fetch_tile_map(placed, path_coords, map_body.size.width, map_body.size.height)
+            self._fetch_tile_map(
+                p, self._db, self._blacklist, resolved,
+                map_body.size.width, map_body.size.height,
+            )
 
         self.app.query_one("#packets", DataTable).move_cursor(row=self._index)
         self.set_focus(None)
@@ -613,23 +890,43 @@ class PacketMapScreen(ModalScreen):
     @work(thread=True, exclusive=True)
     def _fetch_tile_map(
         self,
-        placed: list[tuple[str, str, float, float]],
-        path_coords: list[tuple[float, float]],
+        packet: dict,
+        db: dict,
+        blacklist: list[str],
+        resolved_hops: list["ResolvedHop"],
         w_cells: int,
         h_cells: int,
     ) -> None:
+        remote = _ensure_remote_coords()
+        placed, unplaced, path_segments = collect_map_nodes(
+            packet, db, blacklist, resolved_hops=resolved_hops, remote_coords=remote
+        )
+        # Update footer if remote lookup moved nodes from unplaced → placed
+        self.app.call_from_thread(self._update_footer, placed, unplaced)
+        if not placed:
+            self.app.call_from_thread(
+                self._show_error,
+                "[dim]No coordinates available for any node in this packet.[/dim]",
+            )
+            return
         cell = _get_cell_size()
-        cw, ch = cell.width, cell.height
-        width_px = max(w_cells * cw, 400)
-        height_px = max(h_cells * ch, 300)
+        width_px = max(w_cells * cell.width, 400)
+        height_px = max(h_cells * cell.height, 300)
         try:
-            pil_image = _render_tile_map(placed, path_coords, width_px, height_px)
+            pil_image = _render_tile_map(placed, path_segments, width_px, height_px)
             self.app.call_from_thread(self._show_tile_image, pil_image)
         except Exception as e:
             self.app.call_from_thread(
                 self._show_error,
                 f"[red]Failed to fetch map tiles:[/red] {markup_escape(str(e))}",
             )
+
+    def _update_footer(
+        self,
+        placed: list[tuple[str, str, float, float]],
+        unplaced: list[str],
+    ) -> None:
+        self.query_one("#map_footer", Static).update(_build_footer(placed, unplaced))
 
     def _show_tile_image(self, pil_image) -> None:
         if self._map_widget is not None:
