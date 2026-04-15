@@ -22,9 +22,9 @@ from textual.containers import Container, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Static
 
-from meshcore_tools.db import is_blacklisted, resolve_name
+from meshcore_tools.db import candidates_for, is_blacklisted, resolve_name
 from meshcore_tools.decoder import GROUP_TYPES, decode_packet
-from meshcore_tools.disambiguation import _candidates_for, resolve_path_hops
+from meshcore_tools.disambiguation import _LORA_HARD_CUTOFF_KM, _haversine_km, resolve_path_hops
 
 if TYPE_CHECKING:
     from meshcore_tools.disambiguation import ResolvedHop
@@ -113,24 +113,11 @@ def _route_order_to_segments(
 # Coordinate helpers
 # ---------------------------------------------------------------------------
 
-# Hard physical LoRa range limit: matches _LORA_HARD_CUTOFF_KM in disambiguation.py
-_RELAY_MAX_KM = 150.0
-
-
-def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Great-circle distance in km (Haversine)."""
-    R = 6371.0
-    φ1, φ2 = math.radians(lat1), math.radians(lat2)
-    dφ, dλ = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
-    a = math.sin(dφ / 2) ** 2 + math.cos(φ1) * math.cos(φ2) * math.sin(dλ / 2) ** 2
-    return R * 2 * math.asin(math.sqrt(a))
-
-
 def _guard_relay_range(
     coords: tuple[float, float] | None,
     anchors: list[tuple[float, float]],
     label: str,
-    max_dist_km: float = _RELAY_MAX_KM,
+    max_dist_km: float = _LORA_HARD_CUTOFF_KM,
 ) -> tuple[float, float] | None:
     """Return None when coords are physically impossible for a LoRa relay.
 
@@ -170,7 +157,7 @@ def _geo_resolve_hash(
     """
     if not anchors:
         return None
-    candidates = _candidates_for(node_hash, db)
+    candidates = candidates_for(node_hash, db)
     if len(candidates) < 2:
         return None  # already handled by add_node (unique or unknown)
 
@@ -202,19 +189,18 @@ def _lookup_coords(
 
     Falls back to remote_coords (from map.meshcore.dev) when the db has no match.
     """
-    node_id = node_id.lower()
-    for key, entry in db.get("nodes", {}).items():
-        if key.startswith(node_id) or node_id.startswith(key[: len(node_id)]):
-            lat = entry.get("lat")
-            lon = entry.get("lon")
-            if lat is not None and lon is not None:
-                flat, flon = float(lat), float(lon)
-                if flat != 0.0 or flon != 0.0:  # (0,0) = Null Island — treat as unknown
-                    return (flat, flon)
+    for key, entry in candidates_for(node_id, db):
+        lat = entry.get("lat")
+        lon = entry.get("lon")
+        if lat is not None and lon is not None:
+            flat, flon = float(lat), float(lon)
+            if flat != 0.0 or flon != 0.0:  # (0,0) = Null Island — treat as unknown
+                return (flat, flon)
     if remote_coords:
+        node_id_l = node_id.lower()
         for key, coord in remote_coords.items():
             key_l = key.lower()
-            if key_l.startswith(node_id) or node_id.startswith(key_l[: len(node_id)]):
+            if key_l.startswith(node_id_l) or node_id_l.startswith(key_l[: len(node_id_l)]):
                 lat = coord.get("lat")
                 lon = coord.get("lon")
                 if lat is not None and lon is not None:
@@ -234,13 +220,13 @@ def collect_map_nodes(
     blacklist: list[str] | None = None,
     resolved_hops: list["ResolvedHop"] | None = None,
     remote_coords: dict[str, dict] | None = None,
-    max_relay_dist_km: float = _RELAY_MAX_KM,
+    max_relay_dist_km: float = _LORA_HARD_CUTOFF_KM,
 ) -> tuple[list[tuple[str, str, float, float]], list[str], list[PathSegment]]:
     """Collect nodes involved in a packet with their coordinates.
 
     Args:
         max_relay_dist_km: Hard cut-off (km) beyond which a relay is treated as
-            unplaced.  Defaults to _RELAY_MAX_KM (150 km — hard LoRa limit).
+            unplaced.  Defaults to _LORA_HARD_CUTOFF_KM (150 km — hard LoRa limit).
             Set to math.inf to disable the geographic plausibility check.
 
     Returns:
@@ -299,12 +285,7 @@ def collect_map_nodes(
             # Guard: only look up coords when the hash prefix is unambiguous.
             # A short hash matching multiple DB nodes would place the node at
             # the wrong location; better to leave it unplaced.
-            node_id_l = node_id.lower()
-            n_candidates = sum(
-                1 for key in db.get("nodes", {})
-                if key.startswith(node_id_l) or node_id_l.startswith(key[: len(node_id_l)])
-            )
-            if n_candidates <= 1:
+            if len(candidates_for(node_id, db)) <= 1:
                 coords = _lookup_coords(node_id, db, remote_coords)
         if coords is None:
             hex_id = _hex_prefix(node_id)
@@ -323,7 +304,6 @@ def collect_map_nodes(
         else:
             _place(_map_label(node_id, label), "relay", coords)
 
-    # --- Source ---
     src_hash = ""
     if ptype == "Advert":
         pub = payload_dec.get("public_key", "")
@@ -344,12 +324,10 @@ def collect_map_nodes(
         if src_hash:
             add_node(src_hash, "source")
 
-    # --- Observer ---
     origin_id = packet.get("origin_id", "")
     if origin_id:
         add_node(origin_id, "observer")
 
-    # --- Relays ---
     # Anchor coords for the LoRa range guard: source and observer placed above.
     _anchors: list[tuple[float, float]] = [
         (lat, lon) for _, r, lat, lon in placed if r in ("source", "observer")
@@ -376,16 +354,9 @@ def collect_map_nodes(
                 label = resolve_name(relay_id, db)
                 # Only place if the short hash matches exactly one DB node —
                 # a prefix shared by multiple nodes gives wrong coordinates.
-                relay_id_l = relay_id.lower()
-                n_candidates = sum(
-                    1 for key in db.get("nodes", {})
-                    if key.startswith(relay_id_l) or relay_id_l.startswith(key[: len(relay_id_l)])
-                )
-                if n_candidates == 1:
-                    full_relay_key = next(
-                        key for key in db.get("nodes", {})
-                        if key.startswith(relay_id_l) or relay_id_l.startswith(key[: len(relay_id_l)])
-                    )
+                cands = candidates_for(relay_id, db)
+                if len(cands) == 1:
+                    full_relay_key = cands[0][0]
                     # Only use remote_coords when the DB key is full (64 hex chars).
                     # Partial keys prefix-match worldwide nodes → wrong continent.
                     rc = remote_coords if len(full_relay_key) == 64 else None
@@ -434,23 +405,15 @@ def collect_map_nodes(
             label = resolve_name(hop, db)
             # Same guard as the rh is None branch above: only place when
             # the hash is unambiguous (single DB match).
-            hop_l = hop.lower()
-            n_candidates = sum(
-                1 for key in db.get("nodes", {})
-                if key.startswith(hop_l) or hop_l.startswith(key[: len(hop_l)])
-            )
-            if n_candidates == 1:
-                full_hop_key = next(
-                    key for key in db.get("nodes", {})
-                    if key.startswith(hop_l) or hop_l.startswith(key[: len(hop_l)])
-                )
+            cands = candidates_for(hop, db)
+            if len(cands) == 1:
+                full_hop_key = cands[0][0]
                 rc = remote_coords if len(full_hop_key) == 64 else None
                 relay_coords = _lookup_coords(full_hop_key, db, rc)
             else:
                 relay_coords = None
             add_relay(hop, label, _guard_relay_range(relay_coords, _anchors, label))
 
-    # --- Dest ---
     # Path packets use "dst_hash"; all other types use "dest_hash".
     dest_hash = payload_dec.get("dest_hash", "") or payload_dec.get("dst_hash", "")
     if dest_hash:

@@ -7,6 +7,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Literal
 
+from meshcore_tools.db import candidates_for
+
 UNKNOWN_COORD_PENALTY = 10.0
 GEO_CONFIDENCE_THRESHOLD = 0.5
 _MAX_COMBOS = 1000
@@ -22,16 +24,6 @@ class ResolvedHop:
     lon: float | None
     confidence: Literal["unique", "geo_selected", "ambiguous", "unknown"]
     candidates: list[str] = field(default_factory=list)  # all candidate 64-char keys
-
-
-def _candidates_for(hop_hash: str, db: dict) -> list[tuple[str, dict]]:
-    """Return [(full_key, entry), ...] for all db nodes matching hop_hash as a prefix."""
-    h = hop_hash.lower()
-    return [
-        (key, entry)
-        for key, entry in db.get("nodes", {}).items()
-        if key.startswith(h) or h.startswith(key[: len(h)])
-    ]
 
 
 def resolve_path_hops(
@@ -58,7 +50,7 @@ def resolve_path_hops(
 
     results: list[ResolvedHop] = []
     for hop_hash in path:
-        all_candidates = _candidates_for(hop_hash, db)
+        all_candidates = candidates_for(hop_hash, db)
 
         # Apply blacklist filtering
         kept = [

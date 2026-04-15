@@ -189,6 +189,16 @@ def _resolved_names(origin_id: str, db: dict) -> list[str]:
     ]
 
 
+def candidates_for(hop_hash: str, db: dict) -> list[tuple[str, dict]]:
+    """Return [(full_key, entry), ...] for all db nodes matching hop_hash as a prefix."""
+    h = hop_hash.lower()
+    return [
+        (key, entry)
+        for key, entry in db.get("nodes", {}).items()
+        if key.startswith(h) or h.startswith(key[: len(h)])
+    ]
+
+
 def update(region: str, node_provider: NodeProvider, coord_provider: CoordProvider) -> None:
     # Seed with advert-learned nodes so they survive if not in API/input files
     existing = load_db()
@@ -196,9 +206,11 @@ def update(region: str, node_provider: NodeProvider, coord_provider: CoordProvid
                     if v.get("source") == "advert"}
     db: dict = {"nodes": dict(advert_nodes)}
 
+    input_file_nodes: list[dict[str, dict]] = []
     for f in sorted(INPUT_DIR.glob("*.txt")):
         print(f"Parsing {f.name}...")
         file_nodes = parse_input_file(f)
+        input_file_nodes.append(file_nodes)
         db["nodes"].update(file_nodes)
         print(f"  {len(file_nodes)} nodes")
 
@@ -241,8 +253,8 @@ def update(region: str, node_provider: NodeProvider, coord_provider: CoordProvid
     # replaces input-file entries with API data (which never carries coords),
     # so any lat/lon written in an input file would otherwise be lost.
     # This final pass reinstates them, including partial-key → full-key matches.
-    for f in sorted(INPUT_DIR.glob("*.txt")):
-        for input_key, input_data in parse_input_file(f).items():
+    for file_nodes in input_file_nodes:
+        for input_key, input_data in file_nodes.items():
             if "lat" not in input_data:
                 continue
             for db_key in db["nodes"]:

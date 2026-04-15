@@ -64,15 +64,8 @@ def format_path(path_list: list, db: dict, resolve: int = 2,
     is_direct = route_type in ("Direct", "TransportDirect")
     is_group = ptype in GROUP_TYPES
 
-    use_resolved = resolved_hops is not None and len(resolved_hops) == len(path_list)
-
     def _fmt(display: str, node_id: str) -> str:
         return f"[yellow]{display}[/yellow]" if is_input_node(node_id, db) else display
-
-    def _fmt_resolved(display: str, resolved_key: str | None) -> str:
-        if resolved_key is not None and is_input_node(resolved_key, db):
-            return f"[yellow]{display}[/yellow]"
-        return display
 
     def _resolve(node_id: str) -> str | None:
         """Resolve node_id to display name, filtering blacklisted names out.
@@ -105,11 +98,15 @@ def format_path(path_list: list, db: dict, resolve: int = 2,
     # For group types all path entries are forwarders (no reliable source in path).
     if is_group and not is_direct:
         relays = path_list
-        relay_resolved: list[ResolvedHop] | None = resolved_hops if use_resolved else None
+        relay_resolved: list[ResolvedHop] | None = (
+            resolved_hops
+            if resolved_hops is not None and len(resolved_hops) == len(path_list)
+            else None
+        )
     else:
         relays = path_list if is_direct else path_list[1:]
-        if use_resolved:
-            relay_resolved = resolved_hops if is_direct else resolved_hops[1:]  # type: ignore[index]
+        if resolved_hops is not None and len(resolved_hops) == len(path_list):
+            relay_resolved = resolved_hops if is_direct else resolved_hops[1:]
         else:
             relay_resolved = None
 
@@ -118,7 +115,11 @@ def format_path(path_list: list, db: dict, resolve: int = 2,
         if resolve >= 2 and relay_resolved is not None and i < len(relay_resolved):
             rh = relay_resolved[i]
             if rh.confidence != "ambiguous":
-                relay_parts.append(_fmt_resolved(rh.name, rh.resolved_key))
+                relay_parts.append(
+                    f"[yellow]{rh.name}[/yellow]"
+                    if rh.resolved_key is not None and is_input_node(rh.resolved_key, db)
+                    else rh.name
+                )
             else:
                 # ambiguous: show the combined name with ? suffix, no highlighting
                 relay_parts.append(rh.name)
