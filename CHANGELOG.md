@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Three-mode path display (`n` key): all-names, src+dest-names with `(src)`/`(dest)` labels and relay hex, all-hex
+- Add lat/lon support to input files; apply coords to LX-HAGEN-OBSERVER-SPL
+- Reject relays beyond 150 km LoRa range in map view
+- Add `ResolvedHop` dataclass in `disambiguation.py` for typed hop resolution results
+- Implement Tier 1 prefix lookup in `resolve_path_hops`
+- Add spatial helpers `_build_spatial_index` and `_haversine_km`
+- Implement Tier 2 geographic scoring for hop disambiguation
+- Wire Tier 2 geo-scoring into `resolve_path_hops`
+- Use `ResolvedHop` in `collect_map_nodes` and map call sites
+- Add confidence indicators in `_path_detail_lines`
+- Use `ResolvedHop` in `format_path` and `_add_packet_row`
+- Show packet path one hop per line in detail view
+- Use arrows to expand/collapse multiple observations in monitor table
+- Persist companion channel data to `channels.txt` for packet decryption
+- Import channels from `channels.txt` to connected companion
 - Store channel keys in `secrets.toml` under `[channels]` table; auto-persist keys received from companion on connect
 - Expandable multi-observer sub-rows in monitor table
 - Add MQTT packet source for monitor tab with observer-aware dedup
@@ -22,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Format JSON command responses as key: value lines
 
 ### Changed
+- Simplify channels, connection config, and monitor after secrets.toml migration
+- Add disambiguation unit tests
 - Consolidate XDG config files into config.toml and secrets.toml
 - Expand coverage for decoder, db, channels, and passwords
 - Skip code review for PRs authored by claude[bot]
@@ -31,6 +48,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Remove `--channels` CLI flag; channel keys are now loaded from `secrets.toml` automatically
 
 ### Fixed
+- Restore map footer names, fix Path dest key, add geo-scoring for ambiguous src/dest
+- Reject (0,0) coords as Null Island; move unplaced list to debug log
+- Prevent relay nodes from being placed via remote_coords with short/partial keys
+- Restore relay coord fallback in `collect_map_nodes` for ambiguous hops
+- Defer map size read until after layout to fix first-open crop
+- Add `reload_channels` method to `MonitorTab` and store `_channels_path`
 - Fix companion channel fetch to probe up to 40 slots (was 8); skip empty/unnamed slots
 - Fix channel import: use first free slot index to handle gaps; restore slot cap check at 40
 - Unify F4 Companion tab 'Not connected' display with F2/F3 tabs

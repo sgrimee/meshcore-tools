@@ -40,10 +40,12 @@ def format_path(path_list: list, db: dict, resolve: int = 2,
                 src_hash: str = "", route_type: str = "",
                 hop_size: int = 1, ptype: str = "",
                 blacklist: list[str] | None = None,
-                resolved_hops: "list[ResolvedHop] | None" = None) -> str:
+                resolved_hops: "list[ResolvedHop] | None" = None,
+                dest_hash: str = "") -> str:
     """Format: source → relay1 → relay2 → ...
 
-    resolve: 2 = all names, 1 = source name + relay hex, 0 = all hex.
+    resolve: 2 = all names, 1 = src/dest names + relay hex (with (src)/(dest) labels),
+             0 = all hex.
     src_hash: authoritative source (from payload or Advert pubkey).
     route_type: "Direct"/"TransportDirect" means path entries are relays, not source.
     hop_size: bytes per hop — used to trim src_hash display to match relay display width.
@@ -55,7 +57,8 @@ def format_path(path_list: list, db: dict, resolve: int = 2,
                its names are blacklisted.
     resolved_hops: optional pre-resolved hop data from resolve_path_hops(). When
                    provided and length matches path_list, used instead of live DB
-                   lookups for relay hops.
+                   lookups for relay hops (only used in resolve=2 mode).
+    dest_hash: destination node ID; shown as name with (dest) label in resolve=1 mode.
     """
     bl = blacklist or []
     is_direct = route_type in ("Direct", "TransportDirect")
@@ -86,13 +89,15 @@ def format_path(path_list: list, db: dict, resolve: int = 2,
     # Determine source display (trim src_hash to hop_size for visual consistency)
     if src_hash:
         name = _resolve(src_hash) if resolve >= 1 else _trim_hash(src_hash, hop_size)
-        src = _fmt(name, src_hash) if name is not None else "[dim]?[/dim]"
+        base = _fmt(name, src_hash) if name is not None else "[dim]?[/dim]"
+        src = f"{base} [dim](src)[/dim]" if resolve == 1 else base
     elif is_group and not is_direct:
         # GroupText/GroupData encrypt sender identity; path[0] is the last forwarder
         src = "[dim]enc[/dim]"
     elif path_list and not is_direct:
         name = _resolve(path_list[0]) if resolve >= 1 else path_list[0]
-        src = _fmt(name, path_list[0]) if name is not None else "[dim]?[/dim]"
+        base = _fmt(name, path_list[0]) if name is not None else "[dim]?[/dim]"
+        src = f"{base} [dim](src)[/dim]" if resolve == 1 else base
     else:
         src = "?"
 
@@ -108,12 +113,9 @@ def format_path(path_list: list, db: dict, resolve: int = 2,
         else:
             relay_resolved = None
 
-    if not relays:
-        return src
-
     relay_parts: list[str] = []
     for i, hop in enumerate(relays):
-        if relay_resolved is not None and i < len(relay_resolved):
+        if resolve >= 2 and relay_resolved is not None and i < len(relay_resolved):
             rh = relay_resolved[i]
             if rh.confidence != "ambiguous":
                 relay_parts.append(_fmt_resolved(rh.name, rh.resolved_key))
@@ -128,7 +130,20 @@ def format_path(path_list: list, db: dict, resolve: int = 2,
         else:
             relay_parts.append(_fmt(hop, hop))
 
-    return " → ".join([src] + relay_parts)
+    # Destination label (resolve=1 mode only; skip if unknown)
+    dest_part: str | None = None
+    if resolve == 1 and dest_hash:
+        dest_name = _resolve(dest_hash)
+        if dest_name is not None:
+            dest_part = f"{_fmt(dest_name, dest_hash)} [dim](dest)[/dim]"
+
+    parts = [src] + relay_parts
+    if dest_part:
+        parts.append(dest_part)
+
+    if len(parts) == 1:
+        return src
+    return " → ".join(parts)
 
 
 def format_payload_type(pt: str) -> str:
@@ -909,6 +924,8 @@ class MonitorTab(TabPane):
         raw_path = view.get("_path") or []
         decrypted = view.get("_decrypted") or {}
         src_display = decrypted.get("sender", "") or view.get("_src_hash", "")
+        _payload_dec = (view.get("_decoded") or {}).get("decoded") or {}
+        dest_hash = _payload_dec.get("dest_hash", "")
         resolved_hops = resolve_path_hops(
             raw_path,
             self._db,
@@ -922,7 +939,8 @@ class MonitorTab(TabPane):
                            hop_size=view.get("_path_hop_size", 1),
                            ptype=view.get("payload_type", ""),
                            blacklist=self._blacklist,
-                           resolved_hops=resolved_hops)
+                           resolved_hops=resolved_hops,
+                           dest_hash=dest_hash)
         if self._wrap_path:
             lines = textwrap.wrap(path, width=max(20, wrap_width)) or [path]
             path_cell = Text.from_markup("\n".join(lines))
@@ -1126,7 +1144,7 @@ class MonitorTab(TabPane):
         if self._pkt_filters["path_node"]:
             parts.append(f"path={markup_escape(self._pkt_filters['path_node'])}")
         filt = f"  ({', '.join(parts)})" if parts else ""
-        names = ("  path:names", "  path:src+hex", "  path:hex")[2 - self._resolve_path]
+        names = ("  path:names", "  path:src+dest", "  path:hex")[2 - self._resolve_path]
         wrap = "  wrap:on" if self._wrap_path else ""
         follow = "" if self._follow else "  follow:off"
         layout = "  layout:bottom" if self._layout_bottom else ""
