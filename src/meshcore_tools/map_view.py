@@ -258,11 +258,20 @@ def collect_map_nodes(
     is_direct = route in ("Direct", "TransportDirect")
     is_group = ptype in GROUP_TYPES
     full_path = dec.get("path") or packet.get("_path") or []
+    hop_size = dec.get("path_hop_size", 1)
 
     placed: list[tuple[str, str, float, float]] = []
     unplaced: list[str] = []
     # Routing-order coords for relay hops (None = unplaced, produces a dashed segment)
     relay_route: list[tuple[float, float] | None] = []
+
+    def _hex_prefix(node_id: str) -> str:
+        """Return first hop_size bytes of node_id as hex (e.g. 'a4' or 'a4b2')."""
+        return node_id[:hop_size * 2]
+
+    def _map_label(node_id: str, name: str) -> str:
+        """Format map marker label: 'XX name' (hex prefix + resolved name)."""
+        return f"{_hex_prefix(node_id)} {name}"
 
     def _place(label: str, role: str, coords: tuple[float, float]) -> None:
         """Insert (label, role, lat, lon) into placed, respecting role priority dedup."""
@@ -285,7 +294,7 @@ def collect_map_nodes(
                 resolve_name(node_id, db),
             )
             return
-        label = resolve_name(node_id, db)
+        name = resolve_name(node_id, db)
         if coords is None:
             # Guard: only look up coords when the hash prefix is unambiguous.
             # A short hash matching multiple DB nodes would place the node at
@@ -298,19 +307,21 @@ def collect_map_nodes(
             if n_candidates <= 1:
                 coords = _lookup_coords(node_id, db, remote_coords)
         if coords is None:
-            if label not in unplaced:
-                unplaced.append(label)
+            hex_id = _hex_prefix(node_id)
+            if hex_id not in unplaced:
+                unplaced.append(hex_id)
             return
-        _place(label, role, coords)
+        _place(_map_label(node_id, name), role, coords)
 
-    def add_relay(label: str, coords: tuple[float, float] | None) -> None:
+    def add_relay(node_id: str, label: str, coords: tuple[float, float] | None) -> None:
         """Place a relay hop and record its position in relay_route for gap tracking."""
         relay_route.append(coords)
         if coords is None:
-            if label not in unplaced:
-                unplaced.append(label)
+            hex_id = _hex_prefix(node_id)
+            if hex_id not in unplaced:
+                unplaced.append(hex_id)
         else:
-            _place(label, "relay", coords)
+            _place(_map_label(node_id, label), "relay", coords)
 
     # --- Source ---
     src_hash = ""
@@ -381,7 +392,7 @@ def collect_map_nodes(
                     relay_coords = _lookup_coords(full_relay_key, db, rc)
                 else:
                     relay_coords = None
-                add_relay(label, _guard_relay_range(relay_coords, _anchors, label, max_relay_dist_km))
+                add_relay(relay_id, label, _guard_relay_range(relay_coords, _anchors, label, max_relay_dist_km))
                 continue
 
             check_key = rh.resolved_key if rh.resolved_key is not None else relay_id
@@ -414,7 +425,7 @@ def collect_map_nodes(
                     relay_coords = _lookup_coords(key, db)
                 else:
                     relay_coords = None
-            add_relay(label, _guard_relay_range(relay_coords, _anchors, label))
+            add_relay(relay_id, label, _guard_relay_range(relay_coords, _anchors, label))
     else:
         for hop in relays:
             if is_blacklisted(hop, db, bl):
@@ -437,7 +448,7 @@ def collect_map_nodes(
                 relay_coords = _lookup_coords(full_hop_key, db, rc)
             else:
                 relay_coords = None
-            add_relay(label, _guard_relay_range(relay_coords, _anchors, label))
+            add_relay(hop, label, _guard_relay_range(relay_coords, _anchors, label))
 
     # --- Dest ---
     # Path packets use "dst_hash"; all other types use "dest_hash".
@@ -457,14 +468,14 @@ def collect_map_nodes(
             resolved = _geo_resolve_hash(src_hash, db, _geo_anchors, remote_coords, max_relay_dist_km)
             if resolved:
                 src_key, src_geo_coords = resolved
-                _place(resolve_name(src_key, db), "source", src_geo_coords)
+                _place(_map_label(src_hash, resolve_name(src_key, db)), "source", src_geo_coords)
                 logger.debug("map: source %r placed via geo-scoring at %s", src_key, src_geo_coords)
 
         if dest_hash and not any(r == "dest" for _, r, _, _ in placed):
             resolved = _geo_resolve_hash(dest_hash, db, _geo_anchors, remote_coords, max_relay_dist_km)
             if resolved:
                 dst_key, dst_geo_coords = resolved
-                _place(resolve_name(dst_key, db), "dest", dst_geo_coords)
+                _place(_map_label(dest_hash, resolve_name(dst_key, db)), "dest", dst_geo_coords)
                 logger.debug("map: dest %r placed via geo-scoring at %s", dst_key, dst_geo_coords)
 
     # --- Build path segments: source → relays (with gap flags) → observer ---
