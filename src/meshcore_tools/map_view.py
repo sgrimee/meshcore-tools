@@ -478,6 +478,31 @@ def collect_map_nodes(
                 _place(_map_label(dest_hash, resolve_name(dst_key, db)), "dest", dst_geo_coords)
                 logger.debug("map: dest %r placed via geo-scoring at %s", dst_key, dst_geo_coords)
 
+    # --- Post-placement range validation for source / dest ---
+    # Source and dest are placed without a range guard (the observer isn't known yet
+    # when the source is placed).  After all nodes are placed, remove any source/dest
+    # whose coordinates are more than max_relay_dist_km from every observer and relay —
+    # that almost certainly means a 1-byte hash collision with a node on another continent.
+    _obs_relay_coords: list[tuple[float, float]] = [
+        (lat, lon) for _, role, lat, lon in placed if role in ("observer", "relay")
+    ]
+    if _obs_relay_coords:
+        for entry in list(placed):
+            label, role, lat, lon = entry
+            if role in ("source", "dest"):
+                min_dist = min(
+                    _haversine_km(lat, lon, alat, alon) for alat, alon in _obs_relay_coords
+                )
+                if min_dist > max_relay_dist_km:
+                    placed.remove(entry)
+                    hex_id = label.split(" ", 1)[0]
+                    if hex_id not in unplaced:
+                        unplaced.append(hex_id)
+                    logger.debug(
+                        "map: removed out-of-range %s %r (%.0f km from nearest observer/relay)",
+                        role, label, min_dist,
+                    )
+
     # --- Build path segments: source → relays (with gap flags) → observer ---
     src_coords = next(((lat, lon) for _, r, lat, lon in placed if r == "source"), None)
     obs_coords = next(((lat, lon) for _, r, lat, lon in placed if r == "observer"), None)

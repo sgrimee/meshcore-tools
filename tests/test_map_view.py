@@ -259,10 +259,13 @@ def test_path_segments_dashed_for_unplaced_relay():
     src_key = "aa" * 4
     relay_hash = "bb"  # short hash, not in DB
     obs_key = "cc" * 4
+    # Use Luxembourg-area coordinates ~14 km apart (well within the 150 km LoRa guard)
+    src_lat, src_lon = 49.6, 6.1
+    obs_lat, obs_lon = 49.7, 6.2
     db = {
         "nodes": {
-            src_key: {"lat": 1.0, "lon": 1.0, "name": "src"},
-            obs_key: {"lat": 3.0, "lon": 3.0, "name": "obs"},
+            src_key: {"lat": src_lat, "lon": src_lon, "name": "src"},
+            obs_key: {"lat": obs_lat, "lon": obs_lon, "name": "obs"},
             # relay_hash deliberately absent → unplaced
         }
     }
@@ -290,18 +293,19 @@ def test_path_segments_dashed_for_unplaced_relay():
     # The dashed segment must connect source to observer
     dashed = [(s, e) for s, e, solid in path_segments if not solid]
     assert len(dashed) == 1
-    assert dashed[0][0] == (1.0, 1.0)  # source
-    assert dashed[0][1] == (3.0, 3.0)  # observer
+    assert dashed[0][0] == (src_lat, src_lon)  # source
+    assert dashed[0][1] == (obs_lat, obs_lon)  # observer
 
 
 def test_path_segments_consecutive_unplaced_produce_single_dashed():
     """Two consecutive unplaced relays produce one dashed segment, not two."""
     src_key = "aa" * 4
     obs_key = "dd" * 4
+    # Use Luxembourg-area coordinates ~28 km apart (well within the 150 km LoRa guard)
     db = {
         "nodes": {
-            src_key: {"lat": 1.0, "lon": 1.0, "name": "src"},
-            obs_key: {"lat": 4.0, "lon": 4.0, "name": "obs"},
+            src_key: {"lat": 49.6, "lon": 6.1, "name": "src"},
+            obs_key: {"lat": 49.8, "lon": 6.3, "name": "obs"},
         }
     }
     hops = [
@@ -325,11 +329,12 @@ def test_path_segments_blacklisted_relay_no_gap():
     src_key = "aa" * 4
     obs_key = "cc" * 4
     bl_key = "bb" * 4
+    # Use Luxembourg-area coordinates ~25 km apart (well within the 150 km LoRa guard)
     db = {
         "nodes": {
-            src_key: {"lat": 1.0, "lon": 1.0, "name": "src"},
-            obs_key: {"lat": 3.0, "lon": 3.0, "name": "obs"},
-            bl_key: {"lat": 2.0, "lon": 2.0, "name": "bad-relay"},
+            src_key: {"lat": 49.5, "lon": 6.0, "name": "src"},
+            obs_key: {"lat": 49.7, "lon": 6.2, "name": "obs"},
+            bl_key: {"lat": 49.6, "lon": 6.1, "name": "bad-relay"},
         }
     }
     packet = {
