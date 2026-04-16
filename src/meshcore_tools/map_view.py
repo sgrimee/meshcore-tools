@@ -253,7 +253,7 @@ def collect_map_nodes(
 
     def _hex_prefix(node_id: str) -> str:
         """Return first hop_size bytes of node_id as hex (e.g. 'a4' or 'a4b2')."""
-        return node_id[:hop_size * 2]
+        return node_id[:hop_size * 2].lower()
 
     def _map_label(node_id: str, name: str) -> str:
         """Format map marker label: 'XX name' (hex prefix + resolved name)."""
