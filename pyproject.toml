@@ -13,6 +13,7 @@ mqtt = ["paho-mqtt>=2.0"]
 
 [project.scripts]
 meshcore-tools = "meshcore_tools.cli:main"
+mct = "meshcore_tools.cli:main"
 
 [tool.hatch.version]
 path = "src/meshcore_tools/__version__.py"
