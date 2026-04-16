@@ -175,6 +175,65 @@ def _score_candidate_sequence(
     )
 
 
+def _resolve_ambiguous_hops_per_hop(
+    hops: list[ResolvedHop],
+    spatial_index: dict[str, tuple[float, float]],
+    source_coords: tuple[float, float] | None,
+    observer_coords: tuple[float, float] | None,
+    db: dict,
+) -> list[ResolvedHop]:
+    """Per-hop proximity fallback for paths where combination count exceeds _MAX_COMBOS.
+
+    Iteratively resolves ambiguous hops: if exactly one candidate is within
+    _LORA_HARD_CUTOFF_KM of any known anchor, assign confidence="geo_selected".
+    Newly resolved hops become anchors for subsequent iterations (chain propagation).
+    Terminates when no new hops can be resolved.
+    """
+    anchors: list[tuple[float, float]] = []
+    if source_coords is not None:
+        anchors.append(source_coords)
+    if observer_coords is not None:
+        anchors.append(observer_coords)
+    for hop in hops:
+        if hop.confidence in ("unique", "geo_selected") and hop.lat is not None and hop.lon is not None:
+            anchors.append((hop.lat, hop.lon))
+
+    updated = list(hops)
+    for _ in range(len(hops)):
+        made_progress = False
+        for i, hop in enumerate(updated):
+            if hop.confidence != "ambiguous" or not anchors:
+                continue
+            plausible: list[tuple[str, tuple[float, float]]] = []
+            for key in hop.candidates:
+                coords = spatial_index.get(key)
+                if coords is None:
+                    continue
+                if any(
+                    _haversine_km(coords[0], coords[1], a[0], a[1]) <= _LORA_HARD_CUTOFF_KM
+                    for a in anchors
+                ):
+                    plausible.append((key, coords))
+            if len(plausible) == 1:
+                chosen_key, coords = plausible[0]
+                entry = db.get("nodes", {}).get(chosen_key, {})
+                updated[i] = ResolvedHop(
+                    raw_hash=hop.raw_hash,
+                    resolved_key=chosen_key,
+                    name=entry.get("name", chosen_key[:8]),
+                    lat=coords[0],
+                    lon=coords[1],
+                    confidence="geo_selected",
+                    candidates=hop.candidates,
+                )
+                anchors.append(coords)
+                made_progress = True
+        if not made_progress:
+            break
+
+    return updated
+
+
 def _resolve_ambiguous_hops_by_geometry(
     hops: list[ResolvedHop],
     spatial_index: dict[str, tuple[float, float]],
@@ -201,7 +260,9 @@ def _resolve_ambiguous_hops_by_geometry(
     for hop in hops:
         combo_count *= len(hop.candidates) if hop.candidates else 1
     if combo_count > _MAX_COMBOS:
-        return hops
+        return _resolve_ambiguous_hops_per_hop(
+            hops, spatial_index, source_coords, observer_coords, db
+        )
 
     # Step 2: check if any useful coords exist
     all_candidate_keys = [key for hop in hops for key in hop.candidates]
