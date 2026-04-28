@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import re
 import struct
 
 from Crypto.Cipher import AES  # pycryptodome
@@ -21,10 +22,33 @@ from Crypto.Cipher import AES  # pycryptodome
 PUBLIC_CHANNEL_KEY = bytes.fromhex("8b3387e9c5cdea6ac9e5edbaa115cd72")
 PUBLIC_CHANNEL_LABEL = "Public"
 
+# Hashtag channel keys are always deterministically derivable from their names,
+# so these are tried for every GroupText packet without any secrets.toml entry.
+BUILTIN_CHANNELS: list[tuple[str, bytes]] = [
+    (PUBLIC_CHANNEL_LABEL, PUBLIC_CHANNEL_KEY),
+    ("#wardriving", hashlib.sha256(b"#wardriving").digest()[:16]),
+]
+
+_WARDRIVING_RE = re.compile(r"^@\s*(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)\s*$")
+
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+def parse_wardriving_coords(message: str) -> tuple[float, float] | None:
+    """Parse '@ lat, lon' from a #wardriving message. Returns (lat, lon) or None."""
+    m = _WARDRIVING_RE.match(message.strip())
+    if not m:
+        return None
+    try:
+        lat, lon = float(m.group(1)), float(m.group(2))
+    except ValueError:
+        return None
+    if (lat, lon) == (0.0, 0.0):
+        return None
+    return lat, lon
+
 
 def build_channel_lookup(
     channels: list[tuple[str, bytes]],

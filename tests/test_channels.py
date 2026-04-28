@@ -11,6 +11,7 @@ from Crypto.Cipher import AES
 from meshcore_tools.channels import (
     PUBLIC_CHANNEL_KEY,
     build_channel_lookup,
+    parse_wardriving_coords,
     try_decrypt,
     _aes_ecb_decrypt,
     _channel_hash_byte,
@@ -228,3 +229,35 @@ def test_try_decrypt_bad_plaintext_returns_none():
     try_decrypt(ch_byte, mac, ciphertext, lookup)  # should not raise
 
 
+
+
+# ---------------------------------------------------------------------------
+# parse_wardriving_coords
+# ---------------------------------------------------------------------------
+
+def test_parse_wardriving_coords_valid():
+    assert parse_wardriving_coords("@ 49.59446, 6.15232") == (49.59446, 6.15232)
+
+
+def test_parse_wardriving_coords_negative():
+    assert parse_wardriving_coords("@ -33.8688, 151.2093") == (-33.8688, 151.2093)
+
+
+def test_parse_wardriving_coords_extra_spaces():
+    assert parse_wardriving_coords("@  49.0 ,  6.0 ") == (49.0, 6.0)
+
+
+def test_parse_wardriving_coords_null_island_rejected():
+    assert parse_wardriving_coords("@ 0.0, 0.0") is None
+
+
+def test_parse_wardriving_coords_no_at():
+    assert parse_wardriving_coords("49.59446, 6.15232") is None
+
+
+def test_parse_wardriving_coords_plain_text():
+    assert parse_wardriving_coords("hello world") is None
+
+
+def test_parse_wardriving_coords_empty():
+    assert parse_wardriving_coords("") is None

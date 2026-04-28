@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from meshcore_tools.providers import PacketProvider
     from meshcore_tools.disambiguation import ResolvedHop
 
-from meshcore_tools.channels import build_channel_lookup, try_decrypt
+from meshcore_tools.channels import BUILTIN_CHANNELS, build_channel_lookup, parse_wardriving_coords, try_decrypt
 from meshcore_tools.db import is_input_node, learn_from_advert, load_db, resolve_name, resolve_name_filtered, save_db
 from meshcore_tools.decoder import GROUP_TYPES, decode_packet
 from meshcore_tools.disambiguation import resolve_path_hops
@@ -649,7 +649,7 @@ class MonitorTab(TabPane):
         self.poll_interval = poll_interval
         self._packet_provider = packet_provider
         from meshcore_tools.passwords import load_channels_from_secrets
-        self._channel_lookup = build_channel_lookup(load_channels_from_secrets())
+        self._channel_lookup = build_channel_lookup(BUILTIN_CHANNELS + load_channels_from_secrets())
         self._db: dict = {"nodes": {}}
         self._seen_ids: set[str] = set()
         self._paused = False
@@ -701,7 +701,7 @@ class MonitorTab(TabPane):
     def reload_channels(self) -> None:
         """Reload channel lookup from secrets.toml (called after new channels are persisted)."""
         from meshcore_tools.passwords import load_channels_from_secrets
-        self._channel_lookup = build_channel_lookup(load_channels_from_secrets())
+        self._channel_lookup = build_channel_lookup(BUILTIN_CHANNELS + load_channels_from_secrets())
 
     @work(thread=True, exclusive=True)
     def _poll_worker(self) -> None:
@@ -795,8 +795,7 @@ class MonitorTab(TabPane):
                 if learn_from_advert(self._db, pub, name, role, lat, lon):
                     db_dirty = True
                 p["_src_hash"] = pub[:12]
-            if (pkt_dec.get("payload_type") in GROUP_TYPES
-                    and self._channel_lookup):
+            if pkt_dec.get("payload_type") in GROUP_TYPES:
                 raw_payload = bytes.fromhex(pkt_dec.get("payload_hex", "") or "")
                 if len(raw_payload) >= 3:
                     ch_byte = raw_payload[0]
@@ -804,6 +803,10 @@ class MonitorTab(TabPane):
                     ciphertext = raw_payload[3:]
                     result = try_decrypt(ch_byte, mac, ciphertext, self._channel_lookup)
                     if result:
+                        if result.get("channel") == "#wardriving":
+                            coords = parse_wardriving_coords(result.get("message", ""))
+                            if coords:
+                                result["wardriving_coords"] = coords
                         p["_decrypted"] = result
             self._packets_by_id[p["id"]] = p
         if db_dirty:
