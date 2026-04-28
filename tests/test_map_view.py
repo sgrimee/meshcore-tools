@@ -729,6 +729,39 @@ def test_geo_scoring_resolves_ambiguous_source():
     assert "far-source" not in (label for label, _, _ in src_entries)
 
 
+def test_geo_scoring_rejects_source_when_all_candidates_too_far():
+    """If all candidates for src_hash are >150 km from every anchor, source stays unplaced.
+
+    Regression for the HB9HBD scenario: a 1-byte hash maps to multiple DB nodes,
+    every one of them hundreds of km from the observer.  Geo-scoring must leave the
+    source unplaced rather than picking the least-bad candidate.
+    """
+    # Two candidates sharing the 1-byte prefix "e8", both far from the observer.
+    far1 = "e8" * 4 + "11" * 28   # ~280 km away (Switzerland)
+    far2 = "e8" * 4 + "22" * 28   # ~310 km away (southern France)
+    obs_key = "cc" * 4
+
+    db = {
+        "nodes": {
+            far1:    {"lat": 47.4, "lon": 8.6,  "name": "HB9HBD"},     # Zürich area
+            far2:    {"lat": 47.0, "lon": 8.3,  "name": "HB9-south"},  # also CH
+            obs_key: {"lat": 49.6, "lon": 6.1,  "name": "lux-observer"},
+        }
+    }
+    packet = {
+        "raw_data": "",
+        "_route_type": "Flood",
+        "_src_hash": "e8",
+        "_path": [obs_key],          # single hop: observer is also in path (Direct-like)
+        "origin_id": obs_key,
+    }
+    placed, unplaced, _ = collect_map_nodes(packet, db)
+    src_entries = [e for e in placed if e[1] == "source"]
+    assert not src_entries, (
+        f"All e8 candidates are >150 km from observer — source must stay unplaced; placed: {src_entries}"
+    )
+
+
 def test_geo_scoring_leaves_ambiguous_source_unplaced():
     """If two candidates are both within LoRa range, source stays unplaced."""
     near1 = "aa" * 4 + "11" * 28

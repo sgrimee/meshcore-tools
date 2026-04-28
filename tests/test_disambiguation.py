@@ -132,6 +132,42 @@ def test_tier2_hard_cutoff_rejects_far_candidate():
 
 
 # ---------------------------------------------------------------------------
+# Test 5b: Both candidates within LoRa range — similar distances → ambiguous,
+#           composite name preserved (regression: was overwriting with single name)
+# ---------------------------------------------------------------------------
+
+def test_tier2_similar_distances_stays_ambiguous_composite_name():
+    """Two candidates both ~30-35 km from observer → scores too close → ambiguous.
+
+    Verifies that when Tier 2 cannot confidently pick one candidate, the
+    composite 'NodeA/NodeB?' name is preserved rather than replaced with the
+    winning candidate's single name.
+    """
+    observer_key = _key("obs00000")
+    key_a = _key("aabb1111")
+    key_b = _key("aabb2222")
+
+    # Observer at (50.0, 6.0).
+    # A at ~30 km north, B at ~35 km north — both within 150 km, delta score < 0.5.
+    db = {
+        "nodes": {
+            observer_key: {"name": "Observer", "lat": 50.0, "lon": 6.0},
+            key_a: {"name": "NodeA", "lat": 50.27, "lon": 6.0},
+            key_b: {"name": "NodeB", "lat": 50.315, "lon": 6.0},
+        }
+    }
+
+    hops = resolve_path_hops(["aabb"], db, observer_id=observer_key)
+
+    assert len(hops) == 1
+    hop = hops[0]
+    assert hop.confidence == "ambiguous"
+    assert "NodeA" in hop.name
+    assert "NodeB" in hop.name
+    assert hop.name.endswith("?")
+
+
+# ---------------------------------------------------------------------------
 # Test 6: Tier 2 falls back gracefully — no coords
 # ---------------------------------------------------------------------------
 
