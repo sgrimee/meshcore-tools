@@ -22,6 +22,7 @@ from textual.containers import Container, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Static
 
+from meshcore_tools.channels import parse_wardriving_coords
 from meshcore_tools.db import candidates_for, is_blacklisted, resolve_name
 from meshcore_tools.decoder import GROUP_TYPES, decode_packet
 from meshcore_tools.disambiguation import _LORA_HARD_CUTOFF_KM, _haversine_km, resolve_path_hops
@@ -185,28 +186,58 @@ def _lookup_coords(
     db: dict,
     remote_coords: dict[str, dict] | None = None,
 ) -> tuple[float, float] | None:
-    """Return (lat, lon) for the first db entry matching node_id as a key prefix.
+    """Return (lat, lon) for node_id, consulting db then remote_coords.
 
-    Falls back to remote_coords (from map.meshcore.dev) when the db has no match.
+    When the db yields a full 64-char key, remote_coords is looked up by that
+    exact key — never by prefix scan.  A prefix scan on a worldwide dataset
+    returns the first alphabetical match and would place the node on the wrong
+    continent.  When there is no db match at all, a prefix scan of remote_coords
+    is attempted only if it returns exactly one hit (unambiguous).
     """
+    full_keys: list[str] = []
     for key, entry in candidates_for(node_id, db):
         lat = entry.get("lat")
         lon = entry.get("lon")
         if lat is not None and lon is not None:
             flat, flon = float(lat), float(lon)
-            if flat != 0.0 or flon != 0.0:  # (0,0) = Null Island — treat as unknown
+            if flat != 0.0 or flon != 0.0:
                 return (flat, flon)
-    if remote_coords:
-        node_id_l = node_id.lower()
-        for key, coord in remote_coords.items():
-            key_l = key.lower()
-            if key_l.startswith(node_id_l) or node_id_l.startswith(key_l[: len(node_id_l)]):
-                lat = coord.get("lat")
-                lon = coord.get("lon")
+        if len(key) == 64:
+            full_keys.append(key)
+
+    if remote_coords and full_keys:
+        # Exact lookup — safe, no cross-continent prefix collision possible.
+        for key in full_keys:
+            rc = remote_coords.get(key)
+            if rc:
+                lat = rc.get("lat")
+                lon = rc.get("lon")
                 if lat is not None and lon is not None:
                     flat, flon = float(lat), float(lon)
                     if flat != 0.0 or flon != 0.0:
                         return (flat, flon)
+        return None  # full key known but absent from remote — don't prefix-scan
+
+    if remote_coords and not full_keys:
+        # Node is not in db at all.  Only use remote_coords when the short prefix
+        # matches exactly one worldwide node (otherwise it's a coin-flip).
+        node_id_l = node_id.lower()
+        hits = [
+            (k, v) for k, v in remote_coords.items()
+            if k.lower().startswith(node_id_l)
+        ]
+        logger.debug(
+            "_lookup_coords: remote prefix scan for unknown node %r → %d hit(s)",
+            node_id, len(hits),
+        )
+        if len(hits) == 1:
+            lat = hits[0][1].get("lat")
+            lon = hits[0][1].get("lon")
+            if lat is not None and lon is not None:
+                flat, flon = float(lat), float(lon)
+                if flat != 0.0 or flon != 0.0:
+                    return (flat, flon)
+
     return None
 
 
@@ -250,6 +281,14 @@ def collect_map_nodes(
     unplaced: list[str] = []
     # Routing-order coords for relay hops (None = unplaced, produces a dashed segment)
     relay_route: list[tuple[float, float] | None] = []
+
+    decrypted = packet.get("_decrypted") or {}
+    if decrypted.get("channel") == "#wardriving":
+        wardriving_coords = parse_wardriving_coords(decrypted.get("message", ""))
+        if wardriving_coords:
+            lat, lon = wardriving_coords
+            label = decrypted.get("sender") or "wardriving"
+            placed.append((label, "source", lat, lon))
 
     def _hex_prefix(node_id: str) -> str:
         """Return first hop_size bytes of node_id as hex (e.g. 'a4' or 'a4b2')."""
