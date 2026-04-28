@@ -292,10 +292,10 @@ def _resolve_ambiguous_hops_by_geometry(
     runner_up_score = scored[1][0] if len(scored) > 1 else best_score
 
     # Step 7: apply winning combination
-    confident = (
-        not math.isinf(best_score)
-        and not math.isinf(runner_up_score)
-        and (runner_up_score - best_score) > GEO_CONFIDENCE_THRESHOLD
+    # Confident if: best is finite AND (runner-up is physically impossible OR delta > threshold)
+    confident = not math.isinf(best_score) and (
+        math.isinf(runner_up_score)
+        or (runner_up_score - best_score) > GEO_CONFIDENCE_THRESHOLD
     )
     new_confidence: Literal["geo_selected", "ambiguous"] = (
         "geo_selected" if confident else "ambiguous"
@@ -306,7 +306,14 @@ def _resolve_ambiguous_hops_by_geometry(
         if hop.confidence == "ambiguous":
             coords = spatial_index.get(chosen_key)
             entry = db.get("nodes", {}).get(chosen_key, {})
-            name = entry.get("name", chosen_key[:8])
+            # Preserve the composite "A/B?" name when not confident — single name
+            # would imply resolution that hasn't happened.  Only narrow to a
+            # single name when we are actually committing to geo_selected.
+            name = (
+                entry.get("name", chosen_key[:8])
+                if new_confidence == "geo_selected"
+                else hop.name
+            )
             updated.append(ResolvedHop(
                 raw_hash=hop.raw_hash,
                 resolved_key=chosen_key,
