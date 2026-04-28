@@ -23,9 +23,9 @@ if TYPE_CHECKING:
     from meshcore_tools.disambiguation import ResolvedHop
 
 from meshcore_tools.channels import BUILTIN_CHANNELS, build_channel_lookup, parse_wardriving_coords, try_decrypt
-from meshcore_tools.db import is_input_node, learn_from_advert, load_db, resolve_name, resolve_name_filtered, save_db
+from meshcore_tools.db import candidates_for, is_input_node, learn_from_advert, load_db, resolve_name, resolve_name_filtered, save_db
 from meshcore_tools.decoder import GROUP_TYPES, decode_packet
-from meshcore_tools.disambiguation import resolve_path_hops
+from meshcore_tools.disambiguation import geo_resolve_hash, resolve_path_hops
 from meshcore_tools.map_view import MapSidePanel, PacketMapScreen
 from meshcore_tools.resize_handle import ResizeHandle
 
@@ -183,20 +183,25 @@ def _path_detail_lines(
     full_path: list, db: dict, hop_size: int,
     src_hash: str, route_type: str, ptype: str, dest_hash: str,
     resolved_hops: list["ResolvedHop"] | None = None,
+    src_resolved_key: str | None = None,
+    dest_resolved_key: str | None = None,
 ) -> list[str]:
     """Return one formatted line per path hop for the detail view.
 
     Each line: '  hex  name  [dim](role)[/dim]'
     Roles: (src), (dest) — relays have no role label.
     When resolved_hops is provided, relay hops show confidence indicators.
+    When src_resolved_key/dest_resolved_key are set, the geo-resolved single
+    name is shown instead of the composite ambiguous name.
     """
     is_direct = route_type in ("Direct", "TransportDirect")
     is_group = ptype in GROUP_TYPES
     lines: list[str] = []
 
-    def _hop_line(node_id: str, role: str = "") -> str:
+    def _hop_line(node_id: str, role: str = "", resolved_key: str | None = None) -> str:
         role_str = f"  [dim]({role})[/dim]" if role else ""
-        return f"  {_fmt_hash(node_id, db, hop_size)}{role_str}"
+        display_id = resolved_key if resolved_key else node_id
+        return f"  {_fmt_hash(display_id, db, hop_size)}{role_str}"
 
     def _resolved_relay_line(hop: "ResolvedHop") -> str:
         hex_prefix = hop.raw_hash[: hop_size * 2]
@@ -212,7 +217,7 @@ def _path_detail_lines(
 
     # Source
     if src_hash:
-        lines.append(_hop_line(src_hash, "src"))
+        lines.append(_hop_line(src_hash, "src", resolved_key=src_resolved_key))
     elif is_group and not is_direct:
         lines.append("  [dim]enc[/dim]  [dim](src encrypted)[/dim]")
     elif full_path and not is_direct:
@@ -235,7 +240,7 @@ def _path_detail_lines(
 
     # Destination
     if dest_hash:
-        lines.append(_hop_line(dest_hash, "dest"))
+        lines.append(_hop_line(dest_hash, "dest", resolved_key=dest_resolved_key))
 
     return lines
 
@@ -283,6 +288,31 @@ def _build_detail_text(packet: dict, db: dict) -> str:
         observer_id=p.get("origin_id") or None,
     )
 
+    # Build geo anchors from observer + resolved relay coords for src/dest disambiguation.
+    observer_id = p.get("origin_id", "")
+    _geo_anchors: list[tuple[float, float]] = []
+    if observer_id:
+        for _, e in candidates_for(observer_id, db):
+            if e.get("lat") is not None and e.get("lon") is not None:
+                _geo_anchors.append((float(e["lat"]), float(e["lon"])))
+                break
+    for rh in resolved_hops:
+        if rh.lat is not None and rh.lon is not None:
+            _geo_anchors.append((rh.lat, rh.lon))
+
+    src_resolved_key: str | None = None
+    dest_resolved_key: str | None = None
+    if _geo_anchors:
+        active_src = advert_pubkey or src_hash
+        if active_src:
+            r = geo_resolve_hash(active_src, db, _geo_anchors)
+            if r:
+                src_resolved_key = r[0]
+        if dest_hash:
+            r = geo_resolve_hash(dest_hash, db, _geo_anchors)
+            if r:
+                dest_resolved_key = r[0]
+
     lines.append(f"[dim]Path:[/dim]       [dim]({hop_size}-byte addresses)[/dim]")
     lines.extend(_path_detail_lines(
         full_path, db, hop_size,
@@ -291,6 +321,8 @@ def _build_detail_text(packet: dict, db: dict) -> str:
         ptype=ptype,
         dest_hash=dest_hash,
         resolved_hops=resolved_hops,
+        src_resolved_key=src_resolved_key,
+        dest_resolved_key=dest_resolved_key,
     ))
 
     # Surface decrypted sender for GroupText when available

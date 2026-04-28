@@ -25,7 +25,7 @@ from textual.widgets import DataTable, Static
 from meshcore_tools.channels import parse_wardriving_coords
 from meshcore_tools.db import candidates_for, is_blacklisted, resolve_name
 from meshcore_tools.decoder import GROUP_TYPES, decode_packet
-from meshcore_tools.disambiguation import _LORA_HARD_CUTOFF_KM, _haversine_km, resolve_path_hops
+from meshcore_tools.disambiguation import _LORA_HARD_CUTOFF_KM, _haversine_km, geo_resolve_hash, resolve_path_hops
 
 if TYPE_CHECKING:
     from meshcore_tools.disambiguation import ResolvedHop
@@ -147,38 +147,7 @@ def _geo_resolve_hash(
     remote_coords: dict[str, dict] | None,
     max_dist_km: float,
 ) -> tuple[str, tuple[float, float]] | None:
-    """Try to disambiguate a short node hash using geographic filtering.
-
-    Looks up all DB candidates for node_hash, then keeps only those whose
-    known coordinates are within max_dist_km of at least one anchor position.
-    Returns (full_key, (lat, lon)) when exactly one plausible candidate
-    remains, otherwise None.
-
-    This is the Tier-2 geo-scoring equivalent for source/dest hashes.
-    """
-    if not anchors:
-        return None
-    candidates = candidates_for(node_hash, db)
-    if len(candidates) < 2:
-        return None  # already handled by add_node (unique or unknown)
-
-    plausible: list[tuple[str, tuple[float, float]]] = []
-    for key, entry in candidates:
-        lat = entry.get("lat")
-        lon = entry.get("lon")
-        if (lat is None or lon is None) and remote_coords:
-            rc = remote_coords.get(key)
-            if rc:
-                lat, lon = rc.get("lat"), rc.get("lon")
-        if lat is None or lon is None:
-            continue
-        flat, flon = float(lat), float(lon)
-        if flat == 0.0 and flon == 0.0:
-            continue
-        if any(_haversine_km(flat, flon, a[0], a[1]) <= max_dist_km for a in anchors):
-            plausible.append((key, (flat, flon)))
-
-    return plausible[0] if len(plausible) == 1 else None
+    return geo_resolve_hash(node_hash, db, anchors, remote_coords, max_dist_km)
 
 
 def _lookup_coords(

@@ -130,6 +130,44 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return R * 2 * math.asin(math.sqrt(a))
 
 
+def geo_resolve_hash(
+    node_hash: str,
+    db: dict,
+    anchors: list[tuple[float, float]],
+    remote_coords: dict[str, dict] | None = None,
+    max_dist_km: float = _LORA_HARD_CUTOFF_KM,
+) -> tuple[str, tuple[float, float]] | None:
+    """Try to disambiguate a short node hash using geographic filtering.
+
+    Returns (full_key, (lat, lon)) when exactly one DB candidate is within
+    max_dist_km of at least one anchor, otherwise None.
+
+    This is the Tier-2 equivalent for source/dest hashes; relay hops use
+    _resolve_ambiguous_hops_by_geometry instead.
+    """
+    if not anchors:
+        return None
+    candidates = candidates_for(node_hash, db)
+    if len(candidates) < 2:
+        return None  # already unique or unknown — handled by caller
+    plausible: list[tuple[str, tuple[float, float]]] = []
+    for key, entry in candidates:
+        lat = entry.get("lat")
+        lon = entry.get("lon")
+        if (lat is None or lon is None) and remote_coords:
+            rc = remote_coords.get(key)
+            if rc:
+                lat, lon = rc.get("lat"), rc.get("lon")
+        if lat is None or lon is None:
+            continue
+        flat, flon = float(lat), float(lon)
+        if flat == 0.0 and flon == 0.0:
+            continue
+        if any(_haversine_km(flat, flon, a[0], a[1]) <= max_dist_km for a in anchors):
+            plausible.append((key, (flat, flon)))
+    return plausible[0] if len(plausible) == 1 else None
+
+
 def _score_transition(
     coord_a: tuple[float, float] | None,
     coord_b: tuple[float, float] | None,
