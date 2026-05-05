@@ -7,65 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-05
+
 ### Added
-- Three-mode path display (`n` key): all-names, src+dest-names with `(src)`/`(dest)` labels and relay hex, all-hex
-- Add lat/lon support to input files; apply coords to LX-HAGEN-OBSERVER-SPL
-- Reject relays beyond 150 km LoRa range in map view
-- Add `ResolvedHop` dataclass in `disambiguation.py` for typed hop resolution results
-- Implement Tier 1 prefix lookup in `resolve_path_hops`
-- Add spatial helpers `_build_spatial_index` and `_haversine_km`
-- Implement Tier 2 geographic scoring for hop disambiguation
-- Wire Tier 2 geo-scoring into `resolve_path_hops`
-- Use `ResolvedHop` in `collect_map_nodes` and map call sites
-- Add confidence indicators in `_path_detail_lines`
-- Use `ResolvedHop` in `format_path` and `_add_packet_row`
+- Three-mode path display (`n` key): names, src+dest with labels, or all-hex
+- Coordinate support in input files (lat/lon fields)
+- Relay range limit: hops beyond 150 km are rejected in map view
 - Show packet path one hop per line in detail view
-- Use arrows to expand/collapse multiple observations in monitor table
-- Persist companion channel data to `channels.txt` for packet decryption
-- Import channels from `channels.txt` to connected companion
-- Store channel keys in `secrets.toml` under `[channels]` table; auto-persist keys received from companion on connect
+- Expand/collapse multiple observations with arrow keys in monitor table
 - Expandable multi-observer sub-rows in monitor table
-- Add MQTT packet source for monitor tab with observer-aware dedup
-- Show 'Not connected' banner on F2 Channels and F3 Contacts tabs
-- Add node blacklist to filter spurious address-collision nodes
-- Add F4 companion info tab with device info panel and command input
-- Add settings.toml to persist default region
-- Show recent connections expanded by default in ConnectScreen
-- Colour unread dot indicator in tab labels with warning amber
-- Add unread message indicators for channels and DMs
-- Save per-repeater passwords with fallback default in config
-- Format JSON command responses as key: value lines
+- MQTT packet source for monitor tab with observer-aware deduplication
+- 'Not connected' banner on Channels and Contacts tabs
+- Node blacklist to filter spurious address-collision nodes
+- F4 companion info tab with device info panel and command input
+- Settings file to persist default region across sessions
+- Recent connections shown expanded by default in ConnectScreen
+- Unread indicator in tab labels coloured amber
+- Unread message indicators for channels and DMs
+- Per-repeater password storage with fallback default
+- Command responses formatted as key: value lines
+- Channel keys stored in secrets.toml; auto-synced when connecting companion
+- Channel data persisted to channels.txt and imported to connected companion
+- Show geo-resolved name for source/dest in path detail view
+- Parse wardriving coordinates from #wardriving channel messages
+- Per-hop geo-scoring fallback for long path packets
+- Show hex prefix on map labels; list unplaced nodes by hex prefix
 
 ### Changed
-- Simplify channels, connection config, and monitor after secrets.toml migration
-- Add disambiguation unit tests
-- Consolidate XDG config files into config.toml and secrets.toml
-- Expand coverage for decoder, db, channels, and passwords
-- Skip code review for PRs authored by claude[bot]
-- Refactor companion command dispatch with shared error helper; remove redundant exception wrapping in set_connected and deduplicate query_one calls
-
-### Removed
-- Remove `--channels` CLI flag; channel keys are now loaded from `secrets.toml` automatically
+- Config files consolidated into config.toml and secrets.toml (migration required)
 
 ### Fixed
-- Restore map footer names, fix Path dest key, add geo-scoring for ambiguous src/dest
-- Reject (0,0) coords as Null Island; move unplaced list to debug log
-- Prevent relay nodes from being placed via remote_coords with short/partial keys
-- Restore relay coord fallback in `collect_map_nodes` for ambiguous hops
-- Defer map size read until after layout to fix first-open crop
-- Add `reload_channels` method to `MonitorTab` and store `_channels_path`
-- Fix companion channel fetch to probe up to 40 slots (was 8); skip empty/unnamed slots
-- Fix channel import: use first free slot index to handle gaps; restore slot cap check at 40
-- Unify F4 Companion tab 'Not connected' display with F2/F3 tabs
-- Skip code review for Claude Code-authored PRs
-- Map F4 companion tab commands to binary API calls
-- Resolve BLE device names for legacy history entries
-- Show BLE device name instead of MAC address in recent companion list
-- Show unread dot when message received for selected contact while tab is inactive
-- Recognise channel_secret field and skip all-zero keys in _extract_channel_key_hex
-- Allow bots to trigger claude code review workflow
-- Parse Python dict reprs and improve response formatting
-- Accept bool | None in _on_save callback to satisfy push_screen type overloads
+- Map footer names restored; Path destination key corrected
+- Nodes at (0,0) rejected as Null Island
+- Wrong-continent node placement prevented for short/partial key matches
+- Map display cropped on first open due to premature size read
+- BLE device names shown instead of MAC addresses in recent connections
+- Unread dot shown for messages received while another contact is selected
+- Channel key parsing for channel_secret field; all-zero keys skipped
+- Companion response formatting improved (Python dict reprs parsed)
+- 'Not connected' display unified across Companion tab panels
+- Preserve composite name for ambiguous hops
+- Use exact key lookup in node coordinates to prevent wrong-continent placement
+- Lowercase hex prefixes in map node labels
+- Remove nodes placed on wrong continent via hash collision
 
 ## [0.2.0] - 2026-04-03
 
@@ -153,5 +137,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ConnectScreen Select allow_blank=False and port validation
 - Correct module docstring (ConnectScreen added in Task 3)
 
-[unreleased]: https://github.com/sgrimee/meshcore-tools/compare/v0.2.0...HEAD
+[unreleased]: https://github.com/sgrimee/meshcore-tools/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/sgrimee/meshcore-tools/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/sgrimee/meshcore-tools/compare/v0.1.0...v0.2.0
