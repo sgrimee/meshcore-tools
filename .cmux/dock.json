@@ -1,0 +1,17 @@
+{
+  "controls": [
+    {
+      "id": "git",
+      "title": "Git",
+      "command": "gitui",
+      "cwd": ".",
+      "height": 800
+    },
+    {
+      "id": "monitor-log",
+      "title": "Monitor log",
+      "command": "tail -F /tmp/mc.log",
+      "cwd": "."
+    }
+  ]
+}
