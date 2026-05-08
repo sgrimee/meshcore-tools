@@ -11,7 +11,7 @@ from textual.app import ComposeResult
 from textual.containers import Container, VerticalScroll
 from textual.widgets import Input, Static, TabPane
 
-from meshcore_tools.repeaters import _format_response
+from meshcore_tools.contacts import _format_response
 
 if TYPE_CHECKING:
     from meshcore_tools.companion import CompanionManager

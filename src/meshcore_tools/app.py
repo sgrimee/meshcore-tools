@@ -39,7 +39,7 @@ try:
         _MESHCORE_AVAILABLE as _meshcore_pkg_available,
     )
     from meshcore_tools.chat import ChatTab
-    from meshcore_tools.repeaters import RepeatersTab
+    from meshcore_tools.contacts import ContactsTab
     from meshcore_tools.companion_tab import CompanionInfoTab
     COMPANION_AVAILABLE = _meshcore_pkg_available
 except ImportError:
@@ -54,7 +54,7 @@ class MeshCoreApp(App):
     BINDINGS = [
         Binding("f1", "switch_tab('tab_monitor')", "Monitor", show=False),
         Binding("f2", "switch_tab('tab_chat')", "Channels", show=False),
-        Binding("f3", "switch_tab('tab_repeaters')", "Contacts", show=False),
+        Binding("f3", "switch_tab('tab_contacts')", "Contacts", show=False),
         Binding("f4", "switch_tab('tab_companion')", "Companion", show=False),
         Binding("l", "toggle_log_panel", "Log Panel"),
         Binding("+", "log_panel_grow", "Log +", show=False),
@@ -95,7 +95,7 @@ class MeshCoreApp(App):
             )
             if COMPANION_AVAILABLE:
                 yield ChatTab()
-                yield RepeatersTab()
+                yield ContactsTab()
                 yield CompanionInfoTab()
         yield LogPanel(id="log_panel")
         yield Footer()
@@ -139,7 +139,7 @@ class MeshCoreApp(App):
             pass
 
     def action_switch_tab(self, tab_id: str) -> None:
-        if tab_id in ("tab_chat", "tab_repeaters", "tab_companion") and not COMPANION_AVAILABLE:
+        if tab_id in ("tab_chat", "tab_contacts", "tab_companion") and not COMPANION_AVAILABLE:
             return
         try:
             self.query_one(TabbedContent).active = tab_id
@@ -202,7 +202,7 @@ class MeshCoreApp(App):
             except Exception:
                 pass
             try:
-                self.query_one(RepeatersTab).set_connected(True)
+                self.query_one(ContactsTab).set_connected(True)
             except Exception:
                 pass
 
@@ -216,7 +216,7 @@ class MeshCoreApp(App):
             except Exception:
                 pass
             try:
-                repeaters_tab = self.query_one(RepeatersTab)
+                repeaters_tab = self.query_one(ContactsTab)
                 repeaters_tab.clear()
                 repeaters_tab.set_connected(False)
             except Exception:
@@ -234,9 +234,20 @@ class MeshCoreApp(App):
         if not COMPANION_AVAILABLE:
             return
         try:
-            self.query_one(RepeatersTab).populate_repeaters(message.contacts)
+            self.query_one(ContactsTab).populate_contacts(message.contacts)
         except Exception:
             pass
+        import logging as _logging
+        _log = _logging.getLogger(__name__)
+        try:
+            from meshcore_tools.contacts_store import persist_contact
+            newly_added = sum(
+                1 for c in message.contacts if c.get("public_key") and persist_contact(c)
+            )
+            if newly_added:
+                _log.info("Persisted %d new contact(s) to contacts.toml", newly_added)
+        except Exception as exc:
+            _log.warning("Failed to persist contacts: %s", exc)
 
     def on_channels_updated(self, message: "ChannelsUpdated") -> None:
         if not COMPANION_AVAILABLE:
@@ -283,8 +294,8 @@ class MeshCoreApp(App):
             chat_unread = self.query_one(ChatTab).unread_count()
             chat_tab = tabbed.get_tab("tab_chat")
             chat_tab.label = "F2 Channels [#ffa62b]●[/]" if chat_unread else "F2 Channels"
-            rep_unread = self.query_one(RepeatersTab).unread_count()
-            rep_tab = tabbed.get_tab("tab_repeaters")
+            rep_unread = self.query_one(ContactsTab).unread_count()
+            rep_tab = tabbed.get_tab("tab_contacts")
             rep_tab.label = "F3 Contacts [#ffa62b]●[/]" if rep_unread else "F3 Contacts"
         except Exception:
             pass
@@ -308,7 +319,7 @@ class MeshCoreApp(App):
         if not COMPANION_AVAILABLE:
             return
         try:
-            self.query_one(RepeatersTab).receive_contact_message(
+            self.query_one(ContactsTab).receive_contact_message(
                 pubkey_prefix=message.pubkey_prefix,
                 sender=message.sender,
                 text=message.text,
@@ -322,7 +333,7 @@ class MeshCoreApp(App):
         if not COMPANION_AVAILABLE:
             return
         try:
-            self.query_one(RepeatersTab).receive_login_changed(
+            self.query_one(ContactsTab).receive_login_changed(
                 pubkey_prefix=message.pubkey_prefix,
                 success=message.success,
             )

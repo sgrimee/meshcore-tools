@@ -632,6 +632,31 @@ class CompanionManager:
         except Exception as exc:
             return f"error: {exc}"
 
+    async def set_contact(self, contact: dict) -> str:
+        """Write a contact to the companion. contact needs public_key, adv_name, type.
+        Returns 'ok' on success."""
+        if not self._client or not self._connected:
+            return "not connected"
+        full = {
+            "public_key": contact["public_key"],
+            "adv_name": contact.get("adv_name", ""),
+            "type": contact.get("type", 0),
+            "flags": 0,
+            "out_path": "0" * 128,
+            "out_path_len": 255,
+            "out_path_hash_mode": 0,
+            "last_advert": 0,
+            "adv_lat": 0.0,
+            "adv_lon": 0.0,
+        }
+        try:
+            result = await self._client.commands.update_contact(full)
+            if str(getattr(result, "type", "")) == str(_EventType.ERROR):
+                return f"error: {result.payload}"
+            return "ok"
+        except Exception as exc:
+            return f"error: {exc}"
+
     async def fetch_channels(self) -> None:
         """Re-fetch channels from the companion and post ChannelsUpdated."""
         if not self._client or not self._connected:

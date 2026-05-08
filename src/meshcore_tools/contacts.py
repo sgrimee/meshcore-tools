@@ -147,13 +147,85 @@ _CMD_IDS = ["btn_ping", "btn_status", "btn_telemetry", "btn_login", "btn_trace",
 # (order matches _TYPE_CMDS lists above)
 
 
+class _ImportContactsScreen(ModalScreen["list[dict] | None"]):
+    """Modal: choose which saved contacts to push to the companion."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    DEFAULT_CSS = """
+    _ImportContactsScreen {
+        align: center middle;
+    }
+    _ImportContactsScreen > Container {
+        width: 60;
+        height: auto;
+        max-height: 80%;
+        border: solid $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    _ImportContactsScreen SelectionList {
+        height: auto;
+        max-height: 20;
+        border: solid $panel;
+        margin-bottom: 1;
+    }
+    _ImportContactsScreen Horizontal {
+        height: 3;
+    }
+    _ImportContactsScreen Button {
+        margin-right: 1;
+    }
+    """
+
+    _TYPE_LABEL = {0: "Unknown", 1: "CLI", 2: "Repeater", 3: "Room Server", 4: "Sensor"}
+
+    def __init__(self, contacts: list[dict]) -> None:
+        super().__init__()
+        self._contacts = contacts
+
+    def compose(self) -> ComposeResult:
+        from textual.widgets import SelectionList
+        with Container():
+            yield Static("[bold]Import contacts to companion[/bold]", markup=True)
+            yield Static("Select contacts to add to the companion device:", markup=True)
+            items = [
+                (
+                    f"{c.get('adv_name') or c['public_key'][:8]}  "
+                    f"[dim]{self._TYPE_LABEL.get(c.get('type', 0), '?')}[/dim]",
+                    i,
+                    True,
+                )
+                for i, c in enumerate(self._contacts)
+            ]
+            yield SelectionList(*items, id="contact_selection")
+            with Horizontal():
+                yield Button("Import", variant="primary", id="btn_ok")
+                yield Button("Cancel", id="btn_cancel")
+
+    def on_mount(self) -> None:
+        from textual.widgets import SelectionList
+        self.query_one("#contact_selection", SelectionList).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        from textual.widgets import SelectionList
+        if event.button.id == "btn_cancel":
+            self.dismiss(None)
+        elif event.button.id == "btn_ok":
+            sel = self.query_one("#contact_selection", SelectionList)
+            self.dismiss([self._contacts[i] for i in sel.selected])
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class _CmdButton(Button):
     """Command toolbar button — not individually focusable; navigated with left/right."""
 
     can_focus = False
 
 
-class RepeatersTab(TabPane):
+class ContactsTab(TabPane):
     """Contacts tab: list on left, contextual commands + output log on right."""
 
     BINDINGS = [
@@ -163,58 +235,63 @@ class RepeatersTab(TabPane):
     ]
 
     DEFAULT_CSS = """
-    RepeatersTab {
+    ContactsTab {
         height: 1fr;
         layout: vertical;
     }
-    RepeatersTab #not_connected_banner {
+    ContactsTab #not_connected_banner {
         height: auto;
         padding: 1 2;
         background: $panel;
         border-bottom: solid $accent;
     }
-    RepeatersTab #content_area {
+    ContactsTab #content_area {
         height: 1fr;
         layout: horizontal;
     }
-    RepeatersTab #repeater_list {
+    ContactsTab #left_pane {
         width: 22;
         height: 1fr;
         border-right: solid $accent;
+        layout: vertical;
     }
-    RepeatersTab #repeater_list .contact-header {
+    ContactsTab #repeater_list {
+        width: 1fr;
+        height: 1fr;
+    }
+    ContactsTab #repeater_list .contact-header {
         background: $panel-darken-1;
         color: $accent;
         padding: 0 1;
         text-style: bold;
         border-top: solid $panel-lighten-1;
     }
-    RepeatersTab #repeater_list ListItem.has-unread Label {
+    ContactsTab #repeater_list ListItem.has-unread Label {
         text-style: bold;
         color: $warning;
     }
-    RepeatersTab #right_pane {
+    ContactsTab #right_pane {
         width: 1fr;
         height: 1fr;
         layout: vertical;
     }
-    RepeatersTab #cmd_buttons {
+    ContactsTab #cmd_buttons {
         height: 3;
         layout: horizontal;
         padding: 0 1;
         background: $panel;
     }
-    RepeatersTab #cmd_buttons Button {
+    ContactsTab #cmd_buttons Button {
         margin-right: 1;
     }
-    RepeatersTab #cmd_buttons Button.-active-cmd {
+    ContactsTab #cmd_buttons Button.-active-cmd {
         border: solid $accent;
     }
-    RepeatersTab #output_log {
+    ContactsTab #output_log {
         height: 1fr;
         padding: 1 2;
     }
-    RepeatersTab #input_bar {
+    ContactsTab #input_bar {
         height: 3;
         padding: 0 1;
         background: $panel;
@@ -222,7 +299,7 @@ class RepeatersTab(TabPane):
     """
 
     def __init__(self) -> None:
-        super().__init__("F3 Contacts", id="tab_repeaters")
+        super().__init__("F3 Contacts", id="tab_contacts")
         self._repeaters: list[dict] = []
         self._list_item_map: list[int | None] = []  # list position → _repeaters index (None = header)
         self._selected_idx: int | None = None
@@ -235,7 +312,9 @@ class RepeatersTab(TabPane):
     def compose(self) -> ComposeResult:
         yield Static("[dim]Not connected[/dim]", id="not_connected_banner", markup=True)
         with Container(id="content_area"):
-            yield ListView(id="repeater_list")
+            with Container(id="left_pane"):
+                yield ListView(id="repeater_list")
+                yield Button("Import contacts", id="btn_import_contacts")
             with Container(id="right_pane"):
                 with Container(id="cmd_buttons"):
                     yield _CmdButton("Ping", id="btn_ping")
@@ -376,7 +455,7 @@ class RepeatersTab(TabPane):
     _TYPE_ORDER = [1, 2, 3, 4, 0]
     _TYPE_LABEL = {0: "Unknown", 1: "CLI", 2: "Repeaters", 3: "Room Servers", 4: "Sensors"}
 
-    def populate_repeaters(self, contacts: list[dict]) -> None:
+    def populate_contacts(self, contacts: list[dict]) -> None:
         """Called by MeshCoreApp to fill the contact list, grouped by type."""
         self._repeaters = contacts
         self._list_item_map = []
@@ -473,6 +552,9 @@ class RepeatersTab(TabPane):
             self._do_dm(contact, contact_idx, text)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn_import_contacts":
+            self._action_import_contacts()
+            return
         contact = self._selected_contact()
         if contact is None:
             self._log("No contact selected", "red")
@@ -495,6 +577,56 @@ class RepeatersTab(TabPane):
             self._run_trace(contact, contact_idx)
         elif event.button.id == "btn_reboot":
             self._run_reboot(contact, contact_idx)
+
+    def _action_import_contacts(self) -> None:
+        companion: CompanionManager | None = getattr(self.app, "companion", None)
+        if companion is None or not companion.is_connected:
+            self.app.notify("Companion not connected", severity="warning")
+            return
+        from meshcore_tools.contacts_store import load_contacts
+        saved = load_contacts()
+        if not saved:
+            self.app.notify("No contacts found in contacts.toml", severity="warning")
+            return
+        current_keys = {c.get("public_key") for c in self._repeaters}
+        new_contacts = [
+            {"public_key": pk, **entry}
+            for pk, entry in saved.items()
+            if pk not in current_keys
+        ]
+        if not new_contacts:
+            self.app.notify("All saved contacts are already on the companion")
+            return
+        self.app.push_screen(
+            _ImportContactsScreen(new_contacts),
+            self._on_import_contacts_confirmed,
+        )
+
+    def _on_import_contacts_confirmed(self, selected: "list[dict] | None") -> None:
+        if not selected:
+            return
+        self._do_import_contacts(selected)
+
+    @work(thread=False, exclusive=False)
+    async def _do_import_contacts(self, contacts_to_import: list[dict]) -> None:
+        manager: CompanionManager | None = getattr(self.app, "companion", None)
+        if manager is None:
+            self.app.notify("Companion not connected", severity="error")
+            return
+        imported = 0
+        errors: list[str] = []
+        for contact in contacts_to_import:
+            result = await manager.set_contact(contact)
+            if result == "ok":
+                imported += 1
+            else:
+                errors.append(f"{contact.get('adv_name', contact['public_key'][:8])}: {result}")
+        if errors:
+            self.app.notify(
+                f"Imported {imported}, failed: {'; '.join(errors)}", severity="warning"
+            )
+        else:
+            self.app.notify(f"Imported {imported} contact(s)")
 
     @work(thread=False, exclusive=False)
     async def _do_dm(self, contact: dict, contact_idx: int | None, msg: str) -> None:

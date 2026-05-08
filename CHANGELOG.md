@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Contact list auto-saved to `contacts.toml` on companion connect (name and type per contact)
+- Import saved contacts to another companion from F3 Contacts tab
+
 ### Fixed
 - Map side panel no longer switches to the newest packet when follow mode is off and a new packet arrives
 
