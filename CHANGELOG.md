@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Map side panel no longer switches to the newest packet when follow mode is off and a new packet arrives
+
 ## [0.3.0] - 2026-05-05
 
 ### Added

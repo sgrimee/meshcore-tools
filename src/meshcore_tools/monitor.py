@@ -1081,6 +1081,9 @@ class MonitorTab(TabPane):
             self.app.push_screen(PacketMapScreen(self._displayed, disp_idx, self._db))
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        table = self.query_one("#packets", DataTable)
+        if event.cursor_row != table.cursor_row:
+            return  # stale event from rebuild; cursor already moved elsewhere
         row = event.cursor_row
         if row >= len(self._row_keys):
             return

@@ -16,6 +16,7 @@ import logging
 
 from rich.markup import escape as markup_escape
 from textual import work
+from textual.worker import get_current_worker
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Vertical
@@ -851,10 +852,15 @@ class MapSidePanel(Vertical):
         w_cells: int,
         h_cells: int,
     ) -> None:
+        worker = get_current_worker()
         remote = _ensure_remote_coords()
+        if worker.is_cancelled:
+            return
         placed, unplaced, path_segments = collect_map_nodes(
             packet, db, blacklist, resolved_hops=resolved_hops, remote_coords=remote
         )
+        if worker.is_cancelled:
+            return
         # Update footer if remote lookup moved nodes from unplaced → placed
         self.app.call_from_thread(
             self._update_footer, placed, unplaced
@@ -870,12 +876,14 @@ class MapSidePanel(Vertical):
         height_px = max(h_cells * cell.height, 300)
         try:
             pil_image = _render_tile_map(placed, path_segments, width_px, height_px)
-            self.app.call_from_thread(self._show_tile_image, pil_image)
+            if not worker.is_cancelled:
+                self.app.call_from_thread(self._show_tile_image, pil_image)
         except Exception as e:
-            self.app.call_from_thread(
-                self._show_error,
-                f"[red]Map error:[/red] {markup_escape(str(e))}",
-            )
+            if not worker.is_cancelled:
+                self.app.call_from_thread(
+                    self._show_error,
+                    f"[red]Map error:[/red] {markup_escape(str(e))}",
+                )
 
     def _update_footer(
         self,
