@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -35,7 +36,22 @@ logger = logging.getLogger(__name__)
 try:
     from staticmap import CircleMarker, Line, StaticMap
     from textual_image._terminal import get_cell_size as _get_cell_size
-    from textual_image.widget import Image as TileImage
+
+    # Allow users to override the auto-detected image rendering backend.
+    # Useful when the terminal advertises Sixel/TGP but doesn't actually
+    # render it (e.g. tmux+Alacritty shows "sixel image ... +++" placeholders).
+    _RENDER_MODE = os.environ.get("MESHCORE_MAP_RENDER", "auto").lower()
+    if _RENDER_MODE == "sixel":
+        from textual_image.widget import SixelImage as TileImage
+    elif _RENDER_MODE == "tgp":
+        from textual_image.widget import TGPImage as TileImage
+    elif _RENDER_MODE == "halfcell":
+        from textual_image.widget import HalfcellImage as TileImage
+    elif _RENDER_MODE == "unicode":
+        from textual_image.widget import UnicodeImage as TileImage
+    else:
+        from textual_image.widget import Image as TileImage
+
     _HAS_MAP_LIBS = True
 
     # Detect whether textual-image will fall back to low-resolution rendering.
