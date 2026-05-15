@@ -37,6 +37,17 @@ try:
     from textual_image._terminal import get_cell_size as _get_cell_size
     from textual_image.widget import Image as TileImage
     _HAS_MAP_LIBS = True
+
+    # Detect whether textual-image will fall back to low-resolution rendering.
+    # This happens on terminals that do not support Sixel or the Kitty
+    # graphics protocol (e.g. Alacritty without tmux). In that mode the image
+    # is down-sampled to ~1×2 vertical pixels per cell, which makes OSM maps
+    # look unavoidably blurry regardless of tile zoom level.
+    import textual_image.renderable as _tir
+    from textual_image.renderable.halfcell import Image as _HalfcellImage
+    from textual_image.renderable.unicode import Image as _UnicodeImage
+    _LOW_RES_IMAGE = _tir.Image in (_HalfcellImage, _UnicodeImage)
+    _low_res_warned = False
 except ImportError:
     StaticMap = None  # type: ignore
     CircleMarker = None  # type: ignore
@@ -901,6 +912,16 @@ class MapSidePanel(Vertical):
     def _show_tile_image(self, pil_image) -> None:
         if self._map_widget is not None:
             self._map_widget.remove()
+        if _LOW_RES_IMAGE:
+            global _low_res_warned
+            if not _low_res_warned:
+                _low_res_warned = True
+                logger.warning(
+                    "Map displayed with low-resolution fallback rendering "
+                    "(half-cell/unicode). For sharp maps use a terminal that "
+                    "supports Sixel (e.g. tmux, iTerm2, WezTerm) or the Kitty "
+                    "graphics protocol (e.g. Kitty, Ghostty, cmux)."
+                )
         img = TileImage(pil_image)
         self.query_one("#map_side_body", Container).mount(img)
         self._map_widget = img
@@ -1074,6 +1095,16 @@ class PacketMapScreen(ModalScreen):
     def _show_tile_image(self, pil_image) -> None:
         if self._map_widget is not None:
             self._map_widget.remove()
+        if _LOW_RES_IMAGE:
+            global _low_res_warned
+            if not _low_res_warned:
+                _low_res_warned = True
+                logger.warning(
+                    "Map displayed with low-resolution fallback rendering "
+                    "(half-cell/unicode). For sharp maps use a terminal that "
+                    "supports Sixel (e.g. tmux, iTerm2, WezTerm) or the Kitty "
+                    "graphics protocol (e.g. Kitty, Ghostty, cmux)."
+                )
         img = TileImage(pil_image)
         self.query_one("#map_body", Container).mount(img)
         self._map_widget = img
