@@ -261,6 +261,32 @@ default_password = "hunter2"
 | `mqtt.topic` | `meshcore/raw` | MQTT topic pattern |
 | `mqtt.username` / `mqtt.password` | — | Optional MQTT credentials |
 
+## Map rendering
+
+Map tiles are rendered with [textual-image](https://github.com/lnqs/textual-image), which auto-detects the best available terminal image protocol. For a crisp map, use a terminal that supports **Sixel** or the **Kitty Graphics Protocol (TGP)**:
+
+| Terminal | Protocol | Notes |
+|---|---|---|
+| Kitty | TGP | Native |
+| Ghostty / cmux | TGP | Native |
+| iTerm2 | Sixel | Native |
+| WezTerm | TGP + Sixel | Native |
+| tmux + iTerm2/WezTerm | Sixel | Works well |
+| tmux + Alacritty | — | Alacritty does not support either protocol |
+| Alacritty (no tmux) | Half-cell fallback | Blocky but visible |
+
+If you see a text placeholder like `sixel image (size...) ++++++` instead of a map, the terminal or multiplexer advertises Sixel support but does not actually render it. Force a fallback with the `MESHCORE_MAP_RENDER` environment variable:
+
+```sh
+# Use colored half-blocks (works in any terminal with colour support)
+MESHCORE_MAP_RENDER=halfcell meshcore-tools monitor
+
+# Or set it once in your shell profile
+export MESHCORE_MAP_RENDER=halfcell
+```
+
+Available values: `auto` (default), `sixel`, `tgp`, `halfcell`, `unicode`.
+
 ## Node database
 
 The database is stored in `nodes.json` (gitignored, auto-generated). Run `meshcore-tools nodes update` to create or refresh it.
