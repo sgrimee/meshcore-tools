@@ -72,8 +72,8 @@ def _make_packet(pid: str, origin_id: str = "AABBCC", origin: str = "obs-a",
 def _tab_no_ui() -> MonitorTab:
     """MonitorTab with _rebuild_table and _set_status stubbed out (no widget tree needed)."""
     tab = MonitorTab(region="LUX", packet_provider=_make_provider())
-    tab._rebuild_table = MagicMock()  # type: ignore[method-assign]
-    tab._set_status = MagicMock()  # type: ignore[method-assign]
+    tab._rebuild_table = MagicMock()  # type: ignore
+    tab._set_status = MagicMock()  # type: ignore
     tab._detail_panel_open = False
     return tab
 

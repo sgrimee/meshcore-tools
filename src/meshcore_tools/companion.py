@@ -24,7 +24,7 @@ try:
     _MESHCORE_AVAILABLE = True
 except ImportError:
     _MESHCORE_AVAILABLE = False
-    _EventType = None  # type: ignore[assignment]
+    _EventType = None  # type: ignore
 
 
 # ---------------------------------------------------------------------------

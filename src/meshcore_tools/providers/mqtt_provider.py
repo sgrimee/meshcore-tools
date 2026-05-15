@@ -107,8 +107,8 @@ class MqttPacketProvider:
     def _on_message(self, client: object, userdata: object, message: object) -> None:
         """Paho callback — normalise and enqueue the incoming packet."""
         try:
-            topic: str = message.topic  # type: ignore[union-attr]
-            payload_bytes: bytes = message.payload  # type: ignore[union-attr]
+            topic: str = message.topic  # type: ignore
+            payload_bytes: bytes = message.payload  # type: ignore
             pkt = self._parse_payload(payload_bytes, topic)
             if pkt is not None:
                 self._queue.put(pkt)
