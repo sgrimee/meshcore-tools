@@ -625,6 +625,9 @@ def _draw_dashed_line(
         drawing = not drawing
 
 
+_MAP_TILE_SCALE = 2
+
+
 def _render_tile_map(
     placed: list[tuple[str, str, float, float]],
     path_segments: list[PathSegment],
@@ -635,9 +638,15 @@ def _render_tile_map(
 
     Solid segments connect consecutive placed nodes.
     Dashed segments span gaps where one or more hops had no coordinates.
+    Renders at _MAP_TILE_SCALE× the display size so staticmap selects a higher
+    zoom level (sharper tiles); textual-image scales the result back down.
     """
-    from PIL import ImageDraw, ImageFont
+    from PIL import Image, ImageDraw, ImageFont
     from staticmap.staticmap import _lat_to_y, _lon_to_x
+
+    s = _MAP_TILE_SCALE
+    render_w = width_px * s
+    render_h = height_px * s
 
     _font_candidates = [
         "/System/Library/Fonts/Helvetica.ttc",
@@ -645,25 +654,25 @@ def _render_tile_map(
         "/usr/share/fonts/dejavu/DejaVuSans.ttf",
     ]
     font = next(
-        (ImageFont.truetype(p, 38) for p in _font_candidates if Path(p).exists()),
-        ImageFont.load_default(size=38),
+        (ImageFont.truetype(p, 38 * s) for p in _font_candidates if Path(p).exists()),
+        ImageFont.load_default(size=38 * s),
     )
 
     assert _CachedStaticMap is not None  # only reachable when _HAS_MAP_LIBS is True
-    m = _CachedStaticMap(width_px, height_px)
+    m = _CachedStaticMap(render_w, render_h)
 
     # Add solid path segments via staticmap (rendered beneath markers)
     for (lat1, lon1), (lat2, lon2), is_solid in path_segments:
         if is_solid:
             pts = [(lon1, lat1), (lon2, lat2)]
-            m.add_line(Line(pts, "#000000", 8))
-            m.add_line(Line(pts, "#ffffff", 4))
+            m.add_line(Line(pts, "#000000", 8 * s))
+            m.add_line(Line(pts, "#ffffff", 4 * s))
 
     # Markers: larger for visibility
     for _label, role, lat, lon in placed:
         hex_color, _ = _ROLE_COLORS.get(role, ("#ffffff", "white"))
-        m.add_marker(CircleMarker((lon, lat), "#000000", 26))  # black border
-        m.add_marker(CircleMarker((lon, lat), hex_color, 20))  # colored fill
+        m.add_marker(CircleMarker((lon, lat), "#000000", 26 * s))  # black border
+        m.add_marker(CircleMarker((lon, lat), hex_color, 20 * s))  # colored fill
 
     image = m.render()
     draw = ImageDraw.Draw(image)
@@ -680,8 +689,8 @@ def _render_tile_map(
         if not is_solid:
             x1, y1 = _to_px(lat1, lon1)
             x2, y2 = _to_px(lat2, lon2)
-            _draw_dashed_line(draw, x1, y1, x2, y2, "#000000", 8)
-            _draw_dashed_line(draw, x1, y1, x2, y2, "#ffffff", 4)
+            _draw_dashed_line(draw, x1, y1, x2, y2, "#000000", 8 * s, dash=20 * s, gap=12 * s)
+            _draw_dashed_line(draw, x1, y1, x2, y2, "#ffffff", 4 * s, dash=20 * s, gap=12 * s)
 
     # Build pixel-space line segments for label collision avoidance (all segments)
     line_segs: list[tuple[float, float, float, float]] = []
@@ -694,10 +703,13 @@ def _render_tile_map(
     for label, role, lat, lon in placed:
         px_x, px_y = _to_px(lat, lon)
         lx, ly = _pick_label_pos(
-            draw, font, int(px_x), int(px_y), label, placed_label_boxes, line_segs
+            draw, font, int(px_x), int(px_y), label, placed_label_boxes, line_segs,
+            pad=6 * s,
         )
         draw.text((lx, ly), label, fill="#000000", font=font)
 
+    if s != 1:
+        image = image.resize((width_px, height_px), Image.LANCZOS)  # type: ignore
     return image
 
 
