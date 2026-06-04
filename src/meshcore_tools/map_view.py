@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -36,8 +37,34 @@ logger = logging.getLogger(__name__)
 try:
     from staticmap import CircleMarker, Line, StaticMap
     from textual_image._terminal import get_cell_size as _get_cell_size
-    from textual_image.widget import Image as TileImage
+
+    # Allow users to override the auto-detected image rendering backend.
+    # Useful when the terminal advertises Sixel/TGP but doesn't actually
+    # render it (e.g. tmux+Alacritty shows "sixel image ... +++" placeholders).
+    _RENDER_MODE = os.environ.get("MESHCORE_MAP_RENDER", "auto").lower()
+    if _RENDER_MODE == "sixel":
+        from textual_image.widget import SixelImage as TileImage
+    elif _RENDER_MODE == "tgp":
+        from textual_image.widget import TGPImage as TileImage
+    elif _RENDER_MODE == "halfcell":
+        from textual_image.widget import HalfcellImage as TileImage
+    elif _RENDER_MODE == "unicode":
+        from textual_image.widget import UnicodeImage as TileImage
+    else:
+        from textual_image.widget import Image as TileImage
+
     _HAS_MAP_LIBS = True
+
+    # Detect whether textual-image will fall back to low-resolution rendering.
+    # This happens on terminals that do not support Sixel or the Kitty
+    # graphics protocol (e.g. Alacritty without tmux). In that mode the image
+    # is down-sampled to ~1×2 vertical pixels per cell, which makes OSM maps
+    # look unavoidably blurry regardless of tile zoom level.
+    import textual_image.renderable as _tir
+    from textual_image.renderable.halfcell import Image as _HalfcellImage
+    from textual_image.renderable.unicode import Image as _UnicodeImage
+    _LOW_RES_IMAGE = _tir.Image in (_HalfcellImage, _UnicodeImage)
+    _low_res_warned = False
 except ImportError:
     StaticMap = None  # type: ignore
     CircleMarker = None  # type: ignore
@@ -626,6 +653,9 @@ def _draw_dashed_line(
         drawing = not drawing
 
 
+_MAP_TILE_SCALE = 2
+
+
 def _render_tile_map(
     placed: list[tuple[str, str, float, float]],
     path_segments: list[PathSegment],
@@ -636,9 +666,15 @@ def _render_tile_map(
 
     Solid segments connect consecutive placed nodes.
     Dashed segments span gaps where one or more hops had no coordinates.
+    Renders at _MAP_TILE_SCALE× the display size so staticmap selects a higher
+    zoom level (sharper tiles); textual-image scales the result back down.
     """
-    from PIL import ImageDraw, ImageFont
+    from PIL import Image, ImageDraw, ImageFont
     from staticmap.staticmap import _lat_to_y, _lon_to_x
+
+    s = _MAP_TILE_SCALE
+    render_w = width_px * s
+    render_h = height_px * s
 
     _font_candidates = [
         "/System/Library/Fonts/Helvetica.ttc",
@@ -646,25 +682,25 @@ def _render_tile_map(
         "/usr/share/fonts/dejavu/DejaVuSans.ttf",
     ]
     font = next(
-        (ImageFont.truetype(p, 38) for p in _font_candidates if Path(p).exists()),
-        ImageFont.load_default(size=38),
+        (ImageFont.truetype(p, 38 * s) for p in _font_candidates if Path(p).exists()),
+        ImageFont.load_default(size=38 * s),
     )
 
     assert _CachedStaticMap is not None  # only reachable when _HAS_MAP_LIBS is True
-    m = _CachedStaticMap(width_px, height_px)
+    m = _CachedStaticMap(render_w, render_h)
 
     # Add solid path segments via staticmap (rendered beneath markers)
     for (lat1, lon1), (lat2, lon2), is_solid in path_segments:
         if is_solid:
             pts = [(lon1, lat1), (lon2, lat2)]
-            m.add_line(Line(pts, "#000000", 8))
-            m.add_line(Line(pts, "#ffffff", 4))
+            m.add_line(Line(pts, "#000000", 8 * s))
+            m.add_line(Line(pts, "#ffffff", 4 * s))
 
     # Markers: larger for visibility
     for _label, role, lat, lon in placed:
         hex_color, _ = _ROLE_COLORS.get(role, ("#ffffff", "white"))
-        m.add_marker(CircleMarker((lon, lat), "#000000", 26))  # black border
-        m.add_marker(CircleMarker((lon, lat), hex_color, 20))  # colored fill
+        m.add_marker(CircleMarker((lon, lat), "#000000", 26 * s))  # black border
+        m.add_marker(CircleMarker((lon, lat), hex_color, 20 * s))  # colored fill
 
     image = m.render()
     draw = ImageDraw.Draw(image)
@@ -681,8 +717,8 @@ def _render_tile_map(
         if not is_solid:
             x1, y1 = _to_px(lat1, lon1)
             x2, y2 = _to_px(lat2, lon2)
-            _draw_dashed_line(draw, x1, y1, x2, y2, "#000000", 8)
-            _draw_dashed_line(draw, x1, y1, x2, y2, "#ffffff", 4)
+            _draw_dashed_line(draw, x1, y1, x2, y2, "#000000", 8 * s, dash=20 * s, gap=12 * s)
+            _draw_dashed_line(draw, x1, y1, x2, y2, "#ffffff", 4 * s, dash=20 * s, gap=12 * s)
 
     # Build pixel-space line segments for label collision avoidance (all segments)
     line_segs: list[tuple[float, float, float, float]] = []
@@ -695,10 +731,13 @@ def _render_tile_map(
     for label, role, lat, lon in placed:
         px_x, px_y = _to_px(lat, lon)
         lx, ly = _pick_label_pos(
-            draw, font, int(px_x), int(px_y), label, placed_label_boxes, line_segs
+            draw, font, int(px_x), int(px_y), label, placed_label_boxes, line_segs,
+            pad=6 * s,
         )
         draw.text((lx, ly), label, fill="#000000", font=font)
 
+    if s != 1:
+        image = image.resize((width_px, height_px), Image.LANCZOS)  # type: ignore
     return image
 
 
@@ -897,6 +936,16 @@ class MapSidePanel(Vertical):
     def _show_tile_image(self, pil_image) -> None:
         if self._map_widget is not None:
             self._map_widget.remove()
+        if _LOW_RES_IMAGE:
+            global _low_res_warned
+            if not _low_res_warned:
+                _low_res_warned = True
+                logger.warning(
+                    "Map displayed with low-resolution fallback rendering "
+                    "(half-cell/unicode). For sharp maps use a terminal that "
+                    "supports Sixel (e.g. tmux, iTerm2, WezTerm) or the Kitty "
+                    "graphics protocol (e.g. Kitty, Ghostty, cmux)."
+                )
         img = TileImage(pil_image)
         self.query_one("#map_side_body", Container).mount(img)
         self._map_widget = img
@@ -1070,6 +1119,16 @@ class PacketMapScreen(ModalScreen):
     def _show_tile_image(self, pil_image) -> None:
         if self._map_widget is not None:
             self._map_widget.remove()
+        if _LOW_RES_IMAGE:
+            global _low_res_warned
+            if not _low_res_warned:
+                _low_res_warned = True
+                logger.warning(
+                    "Map displayed with low-resolution fallback rendering "
+                    "(half-cell/unicode). For sharp maps use a terminal that "
+                    "supports Sixel (e.g. tmux, iTerm2, WezTerm) or the Kitty "
+                    "graphics protocol (e.g. Kitty, Ghostty, cmux)."
+                )
         img = TileImage(pil_image)
         self.query_one("#map_body", Container).mount(img)
         self._map_widget = img

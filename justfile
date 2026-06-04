@@ -45,7 +45,7 @@ lookup prefix:
 
 # Clear the OSM tile cache
 clear-tile-cache:
-    rm -rf ~/.cache/meshcore-tools/tiles
+    rm -rf ~/.cache/lma/tiles
 
 # Start live packet monitor TUI
 monitor region="LUX" poll="5":
