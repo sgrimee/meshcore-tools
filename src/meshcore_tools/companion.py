@@ -657,6 +657,28 @@ class CompanionManager:
         except Exception as exc:
             return f"error: {exc}"
 
+    async def remove_contact(self, contact: dict) -> str:
+        """Remove a contact from the companion by public_key. Returns 'ok' on success."""
+        if not self._client or not self._connected:
+            return "not connected"
+        pubkey = contact.get("public_key", "")
+        if not pubkey:
+            return "error: contact has no public key"
+        try:
+            result = await self._client.commands.remove_contact(pubkey)
+            if str(getattr(result, "type", "")) == str(_EventType.ERROR):
+                return f"error: {result.payload}"
+            self._contacts = [c for c in self._contacts if c.get("public_key") != pubkey]
+            return "ok"
+        except Exception as exc:
+            return f"error: {exc}"
+
+    async def fetch_contacts(self) -> None:
+        """Re-fetch contacts from the companion and post ContactsUpdated."""
+        if not self._client or not self._connected:
+            return
+        await self._fetch_contacts()
+
     async def fetch_channels(self) -> None:
         """Re-fetch channels from the companion and post ChannelsUpdated."""
         if not self._client or not self._connected:

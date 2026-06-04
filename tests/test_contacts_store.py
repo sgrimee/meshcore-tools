@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import tomllib
 
-from meshcore_tools.contacts_store import load_contacts, persist_contact
+from meshcore_tools.contacts_store import load_contacts, persist_contact, remove_contact, remove_contacts
 
 
 _CONTACT_A = {"public_key": "aabbcc", "adv_name": "repeater-1", "type": 2}
@@ -81,3 +81,36 @@ def test_adv_name_with_special_chars(tmp_path):
     persist_contact(contact, config_dir=tmp_path)
     contacts = load_contacts(config_dir=tmp_path)
     assert contacts["ff00"]["adv_name"] == 'rep"a\\b'
+
+
+def test_remove_contact_deletes_existing_key(tmp_path):
+    persist_contact(_CONTACT_A, config_dir=tmp_path)
+    persist_contact(_CONTACT_B, config_dir=tmp_path)
+
+    assert remove_contact("aabbcc", config_dir=tmp_path) is True
+
+    contacts = load_contacts(config_dir=tmp_path)
+    assert "aabbcc" not in contacts
+    assert "ddeeff" in contacts
+
+
+def test_remove_missing_contact_returns_false(tmp_path):
+    persist_contact(_CONTACT_A, config_dir=tmp_path)
+
+    assert remove_contact("missing", config_dir=tmp_path) is False
+
+    assert "aabbcc" in load_contacts(config_dir=tmp_path)
+
+
+def test_remove_contacts_deletes_multiple_keys(tmp_path):
+    persist_contact(_CONTACT_A, config_dir=tmp_path)
+    persist_contact(_CONTACT_B, config_dir=tmp_path)
+
+    assert remove_contacts(["aabbcc", "ddeeff", "missing"], config_dir=tmp_path) == 2
+
+    assert load_contacts(config_dir=tmp_path) == {}
+
+
+def test_remove_contacts_empty_input_no_file_created(tmp_path):
+    assert remove_contacts([], config_dir=tmp_path) == 0
+    assert not (tmp_path / "contacts.toml").exists()

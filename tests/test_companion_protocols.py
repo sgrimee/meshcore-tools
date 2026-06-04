@@ -41,12 +41,48 @@ def _make_manager() -> CompanionManager:
     mgr._client = MagicMock()
     mgr._client.commands = MagicMock()
     mgr._client.dispatcher = MagicMock()
+    mgr._contacts = [CONTACT.copy()]
     return mgr
 
 
 def run(coro):
     """Run an async function synchronously — no pytest-asyncio required."""
     return asyncio.new_event_loop().run_until_complete(coro)
+
+
+# ---------------------------------------------------------------------------
+# remove_contact
+# ---------------------------------------------------------------------------
+
+
+def test_remove_contact_calls_meshcore_remove_contact_with_public_key():
+    mgr = _make_manager()
+    mgr._client.commands.remove_contact = AsyncMock(return_value=MagicMock(type="OK"))
+
+    result = run(mgr.remove_contact(CONTACT))
+
+    assert result == "ok"
+    mgr._client.commands.remove_contact.assert_called_once_with(CONTACT["public_key"])
+
+
+def test_remove_contact_updates_cached_contacts_on_success():
+    mgr = _make_manager()
+    mgr._contacts = [CONTACT.copy(), {"public_key": "other", "adv_name": "other"}]
+    mgr._client.commands.remove_contact = AsyncMock(return_value=MagicMock(type="OK"))
+
+    run(mgr.remove_contact(CONTACT))
+
+    assert [c["public_key"] for c in mgr._contacts] == ["other"]
+
+
+def test_remove_contact_without_public_key_returns_error():
+    mgr = _make_manager()
+    mgr._client.commands.remove_contact = AsyncMock()
+
+    result = run(mgr.remove_contact({"adv_name": "no-key"}))
+
+    assert result == "error: contact has no public key"
+    mgr._client.commands.remove_contact.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

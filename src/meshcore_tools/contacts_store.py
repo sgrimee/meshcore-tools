@@ -67,3 +67,26 @@ def persist_contact(contact: dict, config_dir: Path | None = None) -> bool:
     }
     _write_contacts(contacts, config_dir)
     return is_new
+
+
+def remove_contacts(pubkeys: list[str], config_dir: Path | None = None) -> int:
+    """Remove contacts by public_key. Returns the number of stored contacts removed."""
+    keys = {key for key in pubkeys if key}
+    if not keys:
+        return 0
+    if config_dir is None:
+        config_dir = _default_config_dir()
+    contacts = load_contacts(config_dir)
+    removed = 0
+    for key in keys:
+        if key in contacts:
+            del contacts[key]
+            removed += 1
+    if removed:
+        _write_contacts(contacts, config_dir)
+    return removed
+
+
+def remove_contact(pubkey: str, config_dir: Path | None = None) -> bool:
+    """Remove one contact by public_key. Returns True if it existed."""
+    return remove_contacts([pubkey], config_dir) == 1

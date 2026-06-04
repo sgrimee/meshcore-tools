@@ -11,3 +11,4 @@ __pycache__/
 log.txt
 .coverage
 .worktrees/
+graphify-out/

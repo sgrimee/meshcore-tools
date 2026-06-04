@@ -219,6 +219,87 @@ class _ImportContactsScreen(ModalScreen["list[dict] | None"]):
         self.dismiss(None)
 
 
+class _DeleteContactsScreen(ModalScreen["list[dict] | None"]):
+    """Modal: choose one or more companion contacts to delete."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    DEFAULT_CSS = """
+    _DeleteContactsScreen {
+        align: center middle;
+    }
+    _DeleteContactsScreen > Container {
+        width: 64;
+        height: auto;
+        max-height: 80%;
+        border: solid $error;
+        background: $surface;
+        padding: 1 2;
+    }
+    _DeleteContactsScreen SelectionList {
+        height: auto;
+        max-height: 20;
+        border: solid $panel;
+        margin-bottom: 1;
+    }
+    _DeleteContactsScreen Horizontal {
+        height: 3;
+    }
+    _DeleteContactsScreen Button {
+        margin-right: 1;
+    }
+    """
+
+    def __init__(self, contacts: list[dict], selected_keys: set[str] | None = None) -> None:
+        super().__init__()
+        self._contacts = contacts
+        self._selected_keys = selected_keys or set()
+
+    def compose(self) -> ComposeResult:
+        from textual.widgets import SelectionList
+        with Container():
+            yield Static("[bold]Delete contacts[/bold]", markup=True)
+            yield Static(
+                "Select contacts to remove from the companion device.\n"
+                "[dim]Deleted contacts are also removed from local contacts.toml.[/dim]",
+                markup=True,
+            )
+            items = [
+                (
+                    self._format_contact(c),
+                    i,
+                    c.get("public_key", "") in self._selected_keys,
+                )
+                for i, c in enumerate(self._contacts)
+            ]
+            yield SelectionList(*items, id="delete_contact_selection")
+            with Horizontal():
+                yield Button("Delete selected", variant="error", id="btn_ok")
+                yield Button("Cancel", id="btn_cancel")
+
+    def on_mount(self) -> None:
+        from textual.widgets import SelectionList
+        self.query_one("#delete_contact_selection", SelectionList).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        from textual.widgets import SelectionList
+        if event.button.id == "btn_cancel":
+            self.dismiss(None)
+        elif event.button.id == "btn_ok":
+            sel = self.query_one("#delete_contact_selection", SelectionList)
+            self.dismiss([self._contacts[int(i)] for i in sel.selected])
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    @staticmethod
+    def _format_contact(contact: dict) -> str:
+        name = contact.get("adv_name") or contact.get("name") or contact.get("public_key", "?")[:8]
+        pubkey = contact.get("public_key", "")
+        suffix = f"[dim]{pubkey[:12]}[/dim]" if pubkey else "[dim]no key[/dim]"
+        return f"{name}  {suffix}"
+
+
 class _CmdButton(Button):
     """Command toolbar button — not individually focusable; navigated with left/right."""
 
@@ -258,6 +339,9 @@ class ContactsTab(TabPane):
     ContactsTab #repeater_list {
         width: 1fr;
         height: 1fr;
+    }
+    ContactsTab #left_pane Button {
+        width: 1fr;
     }
     ContactsTab #repeater_list .contact-header {
         background: $panel-darken-1;
@@ -315,6 +399,7 @@ class ContactsTab(TabPane):
             with Container(id="left_pane"):
                 yield ListView(id="repeater_list")
                 yield Button("Import contacts", id="btn_import_contacts")
+                yield Button("Delete contacts…", variant="error", id="btn_delete_contacts")
             with Container(id="right_pane"):
                 with Container(id="cmd_buttons"):
                     yield _CmdButton("Ping", id="btn_ping")
@@ -555,6 +640,9 @@ class ContactsTab(TabPane):
         if event.button.id == "btn_import_contacts":
             self._action_import_contacts()
             return
+        if event.button.id == "btn_delete_contacts":
+            self._action_delete_contacts()
+            return
         contact = self._selected_contact()
         if contact is None:
             self._log("No contact selected", "red")
@@ -606,6 +694,56 @@ class ContactsTab(TabPane):
         if not selected:
             return
         self._do_import_contacts(selected)
+
+    def _action_delete_contacts(self) -> None:
+        if not self._repeaters:
+            self.app.notify("No contacts to delete", severity="warning")
+            return
+        selected = self._selected_contact()
+        selected_keys = {selected.get("public_key", "")} if selected else set()
+        self.app.push_screen(
+            _DeleteContactsScreen(list(self._repeaters), selected_keys),
+            self._on_delete_contacts_confirmed,
+        )
+
+    def _on_delete_contacts_confirmed(self, selected: "list[dict] | None") -> None:
+        if not selected:
+            return
+        self._do_delete_contacts(selected)
+
+    @work(thread=False, exclusive=False)
+    async def _do_delete_contacts(self, contacts_to_delete: list[dict]) -> None:
+        manager: CompanionManager | None = getattr(self.app, "companion", None)
+        if manager is None or not manager.is_connected:
+            self.app.notify("Companion not connected", severity="error")
+            return
+        deleted: list[dict] = []
+        errors: list[str] = []
+        for contact in contacts_to_delete:
+            result = await manager.remove_contact(contact)
+            if result == "ok":
+                deleted.append(contact)
+            else:
+                name = contact.get("adv_name") or contact.get("name") or contact.get("public_key", "?")[:8]
+                errors.append(f"{name}: {result}")
+        if deleted:
+            pubkeys = [c.get("public_key", "") for c in deleted]
+            try:
+                from meshcore_tools.contacts_store import remove_contacts
+                remove_contacts(pubkeys)
+            except Exception:
+                pass
+            self._contact_logs = {}
+            self._login_state = {}
+            self._unread.clear()
+            await manager.fetch_contacts()
+        if errors:
+            self.app.notify(
+                f"Deleted {len(deleted)}, failed: {'; '.join(errors)}",
+                severity="warning",
+            )
+        else:
+            self.app.notify(f"Deleted {len(deleted)} contact(s)")
 
     @work(thread=False, exclusive=False)
     async def _do_import_contacts(self, contacts_to_import: list[dict]) -> None:
