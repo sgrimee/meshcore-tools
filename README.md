@@ -225,7 +225,7 @@ Two files live under `$XDG_CONFIG_HOME/meshcore-tools/` (defaults to `~/.config/
 region = "LUX"
 
 [filtering]
-blacklist = ["deadbeef", "cafebabe"]   # public-key prefixes or name substrings to hide
+blacklist = ["deadbeef", "cafebabe"]   # public-key prefixes or name substrings to hide and exclude from path disambiguation
 
 [packet_source]
 type = "mqtt"   # "letsmesh" (default) or "mqtt"
@@ -254,7 +254,7 @@ default_password = "hunter2"
 | Key | Default | Description |
 |---|---|---|
 | `general.region` | `LUX` | Default region for API queries |
-| `filtering.blacklist` | `[]` | Name substrings or key prefixes to suppress in the monitor |
+| `filtering.blacklist` | `[]` | Name substrings or key prefixes to suppress in the monitor and exclude from path disambiguation |
 | `packet_source.type` | `letsmesh` | Packet source: `letsmesh` or `mqtt` |
 | `mqtt.broker` | `localhost` | MQTT broker hostname |
 | `mqtt.port` | `1883` | MQTT broker port |
