@@ -727,12 +727,6 @@ class ContactsTab(TabPane):
                 name = contact.get("adv_name") or contact.get("name") or contact.get("public_key", "?")[:8]
                 errors.append(f"{name}: {result}")
         if deleted:
-            pubkeys = [c.get("public_key", "") for c in deleted]
-            try:
-                from meshcore_tools.contacts_store import remove_contacts
-                remove_contacts(pubkeys)
-            except Exception:
-                pass
             self._contact_logs = {}
             self._login_state = {}
             self._unread.clear()
