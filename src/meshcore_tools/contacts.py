@@ -763,8 +763,9 @@ class ContactsTab(TabPane):
             self.app.notify(
                 f"Imported {imported}, failed: {'; '.join(errors)}", severity="warning"
             )
-        else:
+        if imported:
             self.app.notify(f"Imported {imported} contact(s)")
+            await manager.fetch_contacts()
 
     @work(thread=False, exclusive=False)
     async def _do_dm(self, contact: dict, contact_idx: int | None, msg: str) -> None:
