@@ -7,6 +7,7 @@ from meshcore_tools.companion import (
     CompanionDisconnected,
     ContactMessage,
     ContactsUpdated,
+    _ble_error_message,
     _extract_channel_key_hex,
 )
 
@@ -25,6 +26,17 @@ def test_companion_disconnected_instantiates():
 def test_companion_connection_error_has_reason():
     msg = CompanionConnectionError(reason="timeout")
     assert msg.reason == "timeout"
+
+
+def test_ble_error_message_swift_storage_is_helpful():
+    msg = _ble_error_message(AttributeError("Swift.__StringStorage has no attribute 'address'"))
+    assert "macOS" in msg
+    assert "forget the device" in msg
+
+
+def test_ble_error_message_failed_to_connect_is_helpful_on_macos():
+    msg = _ble_error_message(ConnectionError("Failed to connect to device"))
+    assert "MeshCore did not finish startup" in msg or "Failed to connect to device" in msg
 
 
 def test_channel_message_fields():

@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from meshcore_tools.connection import (
     ConnectionConfig,
+    _is_meshcore_ble_advertisement,
     connection_label,
     list_serial_ports,
     load_connection_config,
@@ -109,6 +110,17 @@ def test_connection_label_legacy_ble_shows_address_suffix(tmp_path):
     assert label == "BLE: …484C7576B8D4"
 
 
+def test_meshcore_ble_advertisement_matches_name_prefix():
+    assert _is_meshcore_ble_advertisement("MeshCore-NONAME", None, None)
+    assert _is_meshcore_ble_advertisement(None, "MeshCore-ABC", None)
+
+
+def test_meshcore_ble_advertisement_matches_service_uuid():
+    assert _is_meshcore_ble_advertisement(None, None, ["6E400001-B5A3-F393-E0A9-E50E24DCCA9E"])
+    assert _is_meshcore_ble_advertisement("Something Else", None, ["6e400001-b5a3-f393-e0a9-e50e24dcca9e"])
+    assert not _is_meshcore_ble_advertisement("Other", None, ["12345678-1234-1234-1234-123456789abc"])
+
+
 # --- list_serial_ports tests ---
 
 
@@ -165,3 +177,14 @@ def test_connect_screen_update_connect_button_checks_type():
     assert '"tcp"' in src
     assert '"serial"' in src
     assert '"ble"' in src
+
+
+def test_connect_screen_hides_ble_pin_on_macos():
+    import inspect
+    from meshcore_tools.connection import ConnectScreen
+    src = inspect.getsource(ConnectScreen.on_mount)
+    assert 'platform.system() == "Darwin"' in src
+    src = inspect.getsource(ConnectScreen.on_select_changed)
+    assert 'platform.system() == "Darwin"' in src
+    src = inspect.getsource(ConnectScreen._submit)
+    assert 'None if platform.system() == "Darwin"' in src

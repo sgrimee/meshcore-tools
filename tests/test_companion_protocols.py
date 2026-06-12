@@ -318,6 +318,73 @@ def test_status_returns_timeout_when_result_is_none():
     assert result == "timeout"
 
 
+# ---------------------------------------------------------------------------
+# BLE resolution helper
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_ble_device_handles_macos_return_adv_tuple():
+    mgr = CompanionManager.__new__(CompanionManager)
+    fake_device = MagicMock()
+    fake_device.address = "A23413B6-AB8F-D90F-B96B-0BDF4F52DE84"
+    fake_device.name = None
+    fake_adv = MagicMock()
+    fake_adv.local_name = None
+    fake_adv.service_uuids = ["6e400001-b5a3-f393-e0a9-e50e24dcca9e"]
+
+    with patch("meshcore_tools.companion._BLEAK_AVAILABLE", True), patch(
+        "meshcore_tools.companion.BleakScanner.discover",
+        AsyncMock(return_value={"A23413B6-AB8F-D90F-B96B-0BDF4F52DE84": (fake_device, fake_adv)}),
+    ):
+        found = run(mgr._resolve_ble_device("A23413B6-AB8F-D90F-B96B-0BDF4F52DE84"))
+
+    assert found is fake_device
+
+
+def test_ble_connect_uses_bleakclient_when_device_is_available():
+    mgr = CompanionManager.__new__(CompanionManager)
+    mgr._app = MagicMock()
+    mgr._connected = False
+    mgr._contacts = []
+    fake_device = MagicMock()
+    fake_device.address = "A23413B6-AB8F-D90F-B96B-0BDF4F52DE84"
+    fake_device.name = None
+    fake_client = MagicMock()
+    fake_client.start_auto_message_fetching = AsyncMock()
+    fake_client.stop_auto_message_fetching = AsyncMock()
+    fake_client.disconnect = AsyncMock()
+    fake_client.self_info = {}
+
+    with patch("meshcore_tools.companion._MESHCORE_AVAILABLE", True), patch(
+        "meshcore_tools.companion.platform.system", return_value="Darwin"
+    ), patch("meshcore_tools.companion.BleakClient", return_value=fake_client) as mock_bleak_client, patch(
+        "meshcore_tools.companion.MeshCore.create_ble", AsyncMock(return_value=fake_client)
+    ) as mock_create_ble, patch.object(mgr, "_resolve_ble_device", AsyncMock(return_value=fake_device)), patch.object(
+        mgr, "_subscribe_events"
+    ) as mock_subscribe, patch.object(mgr, "_fetch_contacts", AsyncMock()), patch.object(
+        mgr, "_fetch_channels", AsyncMock()
+    ), patch.object(
+        mgr._app, "post_message"
+    ):
+        run(
+            mgr.connect(
+                MagicMock(
+                    type="ble",
+                    ble_address=fake_device.address,
+                    ble_pin="123456",
+                    ble_device=fake_device,
+                )
+            )
+        )
+
+    mock_bleak_client.assert_called_once_with(fake_device)
+    mock_create_ble.assert_called_once()
+    _, kwargs = mock_create_ble.call_args
+    assert kwargs.get("client") is fake_client
+    assert kwargs.get("pin") is None
+    mock_subscribe.assert_called_once()
+
+
 def test_status_returns_str_result_on_success():
     mgr = _make_manager()
     fake_result = MagicMock()

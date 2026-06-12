@@ -6,7 +6,9 @@ Only import it inside `try/except ImportError`.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
+
+import platform
 
 import logging
 
@@ -25,6 +27,16 @@ try:
 except ImportError:
     _MESHCORE_AVAILABLE = False
     _EventType = None  # type: ignore
+
+try:
+    from bleak import BleakClient, BleakScanner
+    from meshcore_tools.connection import _is_meshcore_ble_advertisement
+    _BLEAK_AVAILABLE = True
+except ImportError:
+    _BLEAK_AVAILABLE = False
+    BleakScanner = None  # type: ignore
+    BleakClient = None  # type: ignore
+    _is_meshcore_ble_advertisement = None  # type: ignore
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +153,19 @@ def _ble_error_message(exc: Exception) -> str:
     if "NotConnected" in msg:
         return "BLE connection lost. Try again."
     # Strip noisy BlueZ DBus prefix for everything else
+    if "Swift.__StringStorage" in msg or ("address" in msg and "has no attribute" in msg):
+        return (
+            "BLE scan/connect failed on macOS. The Mac scan returned an unexpected "
+            "identifier type; please forget the device in Bluetooth settings and retry."
+        )
+    if "Failed to connect to device" in msg:
+        if platform.system() == "Darwin":
+            return (
+                "BLE transport connected, but MeshCore did not finish startup on macOS. "
+                "This usually means stale Bluetooth pairing state or a device-side bond issue. "
+                "Forget the device on the Mac, power-cycle the companion, and try again."
+            )
+        return msg
     if "org.bluez.Error" in msg:
         return f"BLE error: {msg.split('] ', 1)[-1]}" if '] ' in msg else f"BLE error: {msg}"
     return msg
@@ -221,6 +246,43 @@ class CompanionManager:
         self._contacts: list[Any] = []
         self._connected = False
 
+    async def _resolve_ble_device(self, address: str) -> Any | None:
+        """Resolve a BLEDevice before connecting so the library needn't rescan.
+
+        On macOS, MeshCore's internal address-only scan path can miss devices
+        that advertise without a useful local name. A direct Bleak scan here
+        lets us match by exact address and pass a BLEDevice to MeshCore.create_ble.
+        """
+        if not _BLEAK_AVAILABLE or not address:
+            return None
+        try:
+            found = cast(dict[Any, Any], await BleakScanner.discover(timeout=5.0, return_adv=True))
+        except Exception:
+            return None
+
+        for _key, pair in found.items():
+            try:
+                d, adv = pair
+            except Exception:
+                continue
+            d_addr = str(getattr(d, "address", "") or "")
+            d_name = getattr(d, "name", None)
+            adv_name = getattr(adv, "local_name", None)
+            if d_addr == address:
+                return d
+            if _is_meshcore_ble_advertisement(
+                d_name,
+                adv_name,
+                getattr(adv, "service_uuids", None),
+            ) and address.lower() in {
+                (adv_name or "").lower(),
+                (d_name or "").lower(),
+                d_addr.lower(),
+                str(_key).lower(),
+            }:
+                return d
+        return None
+
     async def connect(self, config: ConnectionConfig) -> None:
         """Establish meshcore connection and subscribe to push events."""
         if not _MESHCORE_AVAILABLE:
@@ -240,19 +302,22 @@ class CompanionManager:
                 self._client = await MeshCore.create_serial(config.device or "")
             elif config.type == "ble":
                 ble_addr = config.ble_address or config.ble_name or ""
-                # Use a freshly scanned BLEDevice when available (set by
-                # ConnectScreen after a manual scan) — this is more reliable
-                # than connecting by MAC address alone, because BlueZ may not
-                # have the device in its cache on startup.
+                # Prefer a real BLEDevice when we can resolve one locally.
+                # This avoids MeshCore's internal address-only scan path,
+                # which can miss name-less macOS advertisements.
                 ble_device = getattr(config, "ble_device", None)
+                if ble_device is None:
+                    ble_device = await self._resolve_ble_device(ble_addr)
+                ble_pin = None if platform.system() == "Darwin" else config.ble_pin
                 try:
                     if ble_device is not None:
+                        ble_client = BleakClient(ble_device)
                         self._client = await MeshCore.create_ble(
-                            device=ble_device, pin=config.ble_pin
+                            client=ble_client, pin=ble_pin
                         )
                     else:
                         self._client = await MeshCore.create_ble(
-                            ble_addr, pin=config.ble_pin
+                            ble_addr, pin=ble_pin
                         )
                 except Exception as exc:
                     if "NotPermitted" not in str(exc):
@@ -272,6 +337,12 @@ class CompanionManager:
             reason = _ble_error_message(exc)
             logger.warning("Companion connection error: %s", reason)
             self._app.post_message(CompanionConnectionError(reason=reason))
+            return
+
+        if self._client is None:
+            self._app.post_message(
+                CompanionConnectionError(reason="BLE connection failed: no client returned")
+            )
             return
 
         self._connected = True

@@ -27,6 +27,20 @@ try:
 except ImportError:
     _BLEAK_AVAILABLE = False
 
+_MESHCORE_BLE_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
+
+
+def _is_meshcore_ble_advertisement(
+    name: str | None,
+    local_name: str | None,
+    service_uuids: list[str] | None,
+) -> bool:
+    """Return True for MeshCore-named devices or devices advertising the UART UUID."""
+    candidate_name = (local_name or name or "").strip()
+    if candidate_name.startswith("MeshCore"):
+        return True
+    return any(str(uuid).lower() == _MESHCORE_BLE_SERVICE_UUID for uuid in service_uuids or [])
+
 
 @dataclass
 class ConnectionConfig:
@@ -196,10 +210,18 @@ async def _scan_ble_subprocess() -> list[tuple[str, str]]:
     script = (
         b"import asyncio, json\n"
         b"from bleak import BleakScanner\n"
+        b"_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e'\n"
         b"async def _scan():\n"
-        b"    devs = await BleakScanner.discover(timeout=5.0)\n"
-        b"    print(json.dumps([[d.name, d.address] for d in devs\n"
-        b"        if d.name and d.name.startswith('MeshCore')]))\n"
+        b"    found = await BleakScanner.discover(timeout=5.0, return_adv=True)\n"
+        b"    out = []\n"
+        b"    for _addr, pair in found.items():\n"
+        b"        d, adv = pair\n"
+        b"        name = (adv.local_name or d.name or '').strip()\n"
+        b"        uuids = [str(u).lower() for u in (adv.service_uuids or [])]\n"
+        b"        if name.startswith('MeshCore') or _UUID in uuids:\n"
+        b"            label = name if name.startswith('MeshCore') else 'MeshCore'\n"
+        b"            out.append([f'{label}  {d.address}', d.address])\n"
+        b"    print(json.dumps(out))\n"
         b"asyncio.run(_scan())\n"
     )
     proc = await asyncio.create_subprocess_exec(
@@ -222,7 +244,7 @@ async def _scan_ble_subprocess() -> list[tuple[str, str]]:
     if proc.returncode != 0:
         raise RuntimeError(f"BLE scan process exited with code {proc.returncode}")
     data = json.loads(stdout or b"[]")
-    return [(f"{name}  {addr}", addr) for name, addr in data]
+    return [(label, addr) for label, addr in data]
 
 
 def _build_ble_name_map(options: list[tuple[str, str]]) -> dict[str, str]:
@@ -363,6 +385,8 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
         self.query_one("#ble-select").display = False
         self.query_one("#ble-pin-section").display = False
         self._show_section(self._current.type)
+        if platform.system() == "Darwin":
+            self.query_one("#ble-pin-section").display = False
         if self._current.type == "serial":
             self._populate_serial_ports()
         history = load_connection_history()
@@ -394,7 +418,10 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
             if str(event.value) == "serial":
                 self._populate_serial_ports()
         elif event.select.id == "ble-select":
-            self.query_one("#ble-pin-section").display = (event.value is not Select.NULL)
+            if platform.system() == "Darwin":
+                self.query_one("#ble-pin-section").display = False
+            else:
+                self.query_one("#ble-pin-section").display = (event.value is not Select.NULL)
             self._update_connect_button()
         else:
             self._update_connect_button()
@@ -480,13 +507,16 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
                 # turned into a readable error instead of crashing the app.
                 options = await _scan_ble_subprocess()
             else:
-                devices = await BleakScanner.discover(timeout=5.0)
+                found = await BleakScanner.discover(timeout=5.0, return_adv=True)
                 # Build options and keep BLEDevice objects for reliable connect
                 self._ble_devices = {}
                 options = []
-                for d in devices:
-                    if d.name and d.name.startswith("MeshCore"):
-                        options.append((f"{d.name}  {d.address}", d.address))
+                for _addr, pair in found.items():
+                    d, adv = pair
+                    name = (adv.local_name or d.name or "").strip()
+                    if _is_meshcore_ble_advertisement(d.name, adv.local_name, adv.service_uuids):
+                        label = name if name.startswith("MeshCore") else "MeshCore"
+                        options.append((f"{label}  {d.address}", d.address))
                         self._ble_devices[d.address] = d
             # Merge in paired/cached devices from BlueZ that weren't advertising
             known = await _known_ble_devices()
@@ -553,7 +583,7 @@ class ConnectScreen(ModalScreen[ConnectionConfig | None]):
             if val is Select.NULL:
                 return
             addr = str(val)
-            pin = self.query_one("#ble_pin", Input).value.strip() or None
+            pin = None if platform.system() == "Darwin" else (self.query_one("#ble_pin", Input).value.strip() or None)
             config = ConnectionConfig(
                 type="ble",
                 ble_name=self._ble_name_map.get(addr, addr),
