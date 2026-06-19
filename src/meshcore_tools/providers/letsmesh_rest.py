@@ -1,6 +1,7 @@
 """letsmesh.net REST provider — implements NodeProvider and PacketProvider."""
 
 import json
+import urllib.error
 import urllib.request
 from typing import Any
 
@@ -21,8 +22,12 @@ _ROLE_MAP = {1: "CLI", 2: "REP", 3: "RMS", 4: "CLT"}
 
 def _fetch_json(url: str) -> Any:
     req = urllib.request.Request(url, headers=_HEADERS)
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace").strip()
+        raise urllib.error.HTTPError(e.url, e.code, f"{e.reason}: {body}" if body else e.reason, e.headers, None) from None
 
 
 class LetsmeshRestProvider:

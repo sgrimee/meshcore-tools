@@ -56,7 +56,8 @@ def _load_secrets(config_dir: Path) -> dict:
 def _write_secrets(data: dict, config_dir: Path) -> None:
     """Serialize and write secrets.toml with 0o600 permissions.
 
-    Top-level scalar keys are written first, then [passwords], then [channels].
+    Top-level scalar keys are written first, then [passwords], [channels],
+    then one [mqtt."<broker>"] table per configured broker.
     """
     lines = [
         "# meshcore-tools secrets\n",
@@ -64,7 +65,7 @@ def _write_secrets(data: dict, config_dir: Path) -> None:
         "\n",
     ]
     for key, value in data.items():
-        if key in ("passwords", "channels"):
+        if key in ("passwords", "channels", "mqtt"):
             continue
         escaped = _escape_toml_string(str(value))
         lines.append(f'{key} = "{escaped}"\n')
@@ -82,6 +83,13 @@ def _write_secrets(data: dict, config_dir: Path) -> None:
             lines.append(
                 f'"{_escape_toml_string(name)}" = "{_escape_toml_string(key_hex)}"\n'
             )
+    mqtt = data.get("mqtt", {})
+    for broker, creds in mqtt.items():
+        if not isinstance(creds, dict):
+            continue
+        lines.append(f'\n[mqtt."{_escape_toml_string(broker)}"]\n')
+        for key, value in creds.items():
+            lines.append(f'{key} = "{_escape_toml_string(str(value))}"\n')
     path = config_dir / _SECRETS_FILE
     _write_secure(path, "".join(lines))
 
@@ -111,6 +119,46 @@ def save_default_password(
         config_dir = _default_config_dir()
     data = _load_secrets(config_dir)
     data["default_password"] = password
+    _write_secrets(data, config_dir)
+
+
+# ---------------------------------------------------------------------------
+# secrets.toml — MQTT broker credentials
+# ---------------------------------------------------------------------------
+
+
+def load_mqtt_credentials(
+    broker: str, config_dir: Path | None = None
+) -> dict[str, str]:
+    """Return {'username': ..., 'password': ...} for *broker* from secrets.toml.
+
+    secrets.toml keys credentials by broker hostname (``[mqtt."<broker>"]``)
+    since several brokers may be configured over time. Returns {} if unset.
+    Broker connection details (host/port/topic) live in config.toml; only
+    credentials are kept in secrets.toml.
+    """
+    if config_dir is None:
+        config_dir = _default_config_dir()
+    data = _load_secrets(config_dir)
+    creds = data.get("mqtt", {}).get(broker, {})
+    if not isinstance(creds, dict):
+        return {}
+    return {
+        k: str(creds[k]) for k in ("username", "password") if creds.get(k)
+    }
+
+
+def save_mqtt_credentials(
+    broker: str, username: str, password: str, config_dir: Path | None = None
+) -> None:
+    """Persist credentials for *broker* to secrets.toml with 600 permissions.
+
+    WARNING: The password is stored in plaintext.
+    """
+    if config_dir is None:
+        config_dir = _default_config_dir()
+    data = _load_secrets(config_dir)
+    data.setdefault("mqtt", {})[broker] = {"username": username, "password": password}
     _write_secrets(data, config_dir)
 
 

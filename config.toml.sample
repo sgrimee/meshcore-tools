@@ -15,11 +15,21 @@ blacklist = []
 [packet_source]
 # Packet source for the monitor tab: "letsmesh" (default) or "mqtt".
 type = "letsmesh"
+# Which [mqtt.<name>] profile below to use when type = "mqtt".
+# Defaults to "luxmesh" — the public live.luxmesh.lu broker, which works
+# with no [mqtt.luxmesh] table at all if you don't need to override it.
+mqtt_server = "luxmesh"
 
-# MQTT settings — only used when packet_source.type = "mqtt"
-[mqtt]
-broker = "localhost"
+# MQTT server profiles — only used when packet_source.type = "mqtt".
+# Define as many as you like and switch between them via mqtt_server above.
+# Credentials (if a broker requires them) go in secrets.toml instead,
+# keyed by broker hostname — see secrets.toml.sample.
+[mqtt.luxmesh]
+broker = "live.luxmesh.lu"
 port = 1883
-topic = "meshcore/raw"
-# username = "..."
-# password = "..."
+topic = "meshcore/LUX/+/packets"
+
+# [mqtt.home]
+# broker = "localhost"
+# port = 1883
+# topic = "meshcore/raw"

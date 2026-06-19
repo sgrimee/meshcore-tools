@@ -8,8 +8,10 @@ import stat
 from meshcore_tools.passwords import (
     get_prefilled_password,
     load_default_password,
+    load_mqtt_credentials,
     load_repeater_passwords,
     save_default_password,
+    save_mqtt_credentials,
     save_repeater_password,
 )
 
@@ -174,3 +176,64 @@ def test_save_default_password_with_corrupt_existing_settings(tmp_path):
     # Should not raise
     save_default_password("newpass", config_dir=tmp_path)
     assert load_default_password(config_dir=tmp_path) == "newpass"
+
+
+# ---------------------------------------------------------------------------
+# MQTT broker credentials (secrets.toml [mqtt])
+# ---------------------------------------------------------------------------
+
+
+def test_load_mqtt_credentials_missing_file(tmp_path):
+    assert load_mqtt_credentials("live.luxmesh.lu", config_dir=tmp_path) == {}
+
+
+def test_save_and_load_mqtt_credentials(tmp_path):
+    save_mqtt_credentials("live.luxmesh.lu", "sam", "s3cr3t", config_dir=tmp_path)
+    assert load_mqtt_credentials("live.luxmesh.lu", config_dir=tmp_path) == {
+        "username": "sam",
+        "password": "s3cr3t",
+    }
+
+
+def test_save_mqtt_credentials_600_permissions(tmp_path):
+    save_mqtt_credentials("live.luxmesh.lu", "sam", "s3cr3t", config_dir=tmp_path)
+    mode = (tmp_path / "secrets.toml").stat().st_mode
+    assert stat.S_IMODE(mode) == 0o600
+
+
+def test_save_mqtt_credentials_preserves_other_sections(tmp_path):
+    save_default_password("default_pw", config_dir=tmp_path)
+    save_mqtt_credentials("live.luxmesh.lu", "sam", "s3cr3t", config_dir=tmp_path)
+    assert load_default_password(config_dir=tmp_path) == "default_pw"
+    assert load_mqtt_credentials("live.luxmesh.lu", config_dir=tmp_path) == {
+        "username": "sam",
+        "password": "s3cr3t",
+    }
+
+
+def test_save_mqtt_credentials_overwrites_existing(tmp_path):
+    save_mqtt_credentials("live.luxmesh.lu", "sam", "old_pw", config_dir=tmp_path)
+    save_mqtt_credentials("live.luxmesh.lu", "sam", "new_pw", config_dir=tmp_path)
+    assert load_mqtt_credentials("live.luxmesh.lu", config_dir=tmp_path) == {
+        "username": "sam",
+        "password": "new_pw",
+    }
+
+
+def test_save_mqtt_credentials_multiple_brokers(tmp_path):
+    """Several brokers can each have their own stored credentials."""
+    save_mqtt_credentials("live.luxmesh.lu", "sam", "lux_pw", config_dir=tmp_path)
+    save_mqtt_credentials("mqtt.example.com", "alice", "ex_pw", config_dir=tmp_path)
+    assert load_mqtt_credentials("live.luxmesh.lu", config_dir=tmp_path) == {
+        "username": "sam",
+        "password": "lux_pw",
+    }
+    assert load_mqtt_credentials("mqtt.example.com", config_dir=tmp_path) == {
+        "username": "alice",
+        "password": "ex_pw",
+    }
+
+
+def test_load_mqtt_credentials_unknown_broker(tmp_path):
+    save_mqtt_credentials("live.luxmesh.lu", "sam", "s3cr3t", config_dir=tmp_path)
+    assert load_mqtt_credentials("other.broker.com", config_dir=tmp_path) == {}

@@ -228,17 +228,23 @@ region = "LUX"
 blacklist = ["deadbeef", "cafebabe"]   # public-key prefixes or name substrings to hide and exclude from path disambiguation
 
 [packet_source]
-type = "mqtt"   # "letsmesh" (default) or "mqtt"
+type = "mqtt"          # "letsmesh" (default) or "mqtt"
+mqtt_server = "luxmesh" # which [mqtt.<name>] profile to use (default: "luxmesh")
 
-[mqtt]
+# Define as many MQTT server profiles as you like; switch with mqtt_server above.
+# "luxmesh" (live.luxmesh.lu) is built in and works even without this table.
+[mqtt.luxmesh]
+broker = "live.luxmesh.lu"
+port = 1883
+topic = "meshcore/LUX/+/packets"
+
+[mqtt.home]
 broker = "localhost"
 port = 1883
 topic = "meshcore/raw"
-# username = "..."
-# password = "..."
 ```
 
-**`secrets.toml`** (always `600` permissions) — login passwords and channel keys:
+**`secrets.toml`** (always `600` permissions) — login passwords, channel keys, and MQTT credentials:
 
 ```toml
 default_password = "hunter2"
@@ -249,17 +255,26 @@ default_password = "hunter2"
 [channels]
 "Public" = "8b3387e9c5cdea6ac9e5edbaa115cd72"
 "#wardriving" = "e3c26491e9cd321e3a6be50d57d54acf"
+
+[mqtt."broker.example.com"]
+username = "your-username"
+password = "your-password"
 ```
+
+If `packet_source.type` is unset (or anything other than `"mqtt"`), the monitor always uses the letsmesh REST API — MQTT is entirely optional. When `type = "mqtt"`, `packet_source.mqtt_server` selects which `[mqtt.<name>]` profile to connect to; it defaults to `"luxmesh"`, a built-in profile pointing at the public `live.luxmesh.lu` broker, so MQTT works with zero `config.toml` entries. Pointing `mqtt_server` at a name with no matching `[mqtt.<name>]` table and no built-in falls back to `broker = "localhost"`.
+
+MQTT credentials live in `secrets.toml`, **keyed by broker hostname** (the `broker` value inside the active `[mqtt.<name>]` profile) rather than by profile name — this keeps passwords out of the less-sensitive general config file, and credentials for a broker are picked up automatically no matter which profile name points at it.
 
 | Key | Default | Description |
 |---|---|---|
 | `general.region` | `LUX` | Default region for API queries |
 | `filtering.blacklist` | `[]` | Name substrings or key prefixes to suppress in the monitor and exclude from path disambiguation |
 | `packet_source.type` | `letsmesh` | Packet source: `letsmesh` or `mqtt` |
-| `mqtt.broker` | `localhost` | MQTT broker hostname |
-| `mqtt.port` | `1883` | MQTT broker port |
-| `mqtt.topic` | `meshcore/raw` | MQTT topic pattern |
-| `mqtt.username` / `mqtt.password` | — | Optional MQTT credentials |
+| `packet_source.mqtt_server` | `luxmesh` | Which `[mqtt.<name>]` profile to use |
+| `mqtt.<name>.broker` | `live.luxmesh.lu` (for the built-in `luxmesh` profile) / `localhost` | MQTT broker hostname |
+| `mqtt.<name>.port` | `1883` | MQTT broker port |
+| `mqtt.<name>.topic` | `meshcore/raw` (`meshcore/LUX/+/packets` for `luxmesh`) | MQTT topic pattern |
+| `secrets.toml` `[mqtt."<broker>"]` `username` / `password` | — | Optional MQTT credentials for that broker hostname |
 
 ## Map rendering
 
